@@ -232,6 +232,7 @@ def run(args: argparse.Namespace) -> dict:
         tile_overlap = args.tile_overlap,
         use_tta      = args.tta,
         device       = args.device,
+        tracker_high_thresh = args.high_thresh,
     )
 
     # Reset ByteTrack ID counter for reproducibility between runs
