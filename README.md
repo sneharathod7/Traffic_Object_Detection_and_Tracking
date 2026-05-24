@@ -360,7 +360,7 @@ One row per (frame, track_id) pair:
 | **Tiling** | Adaptive tiling (denser tiles in high-density image regions) | Fewer redundant tiles in sky/background areas |
 | **Tracking** | StrongSORT (ReID embeddings) | Resolves ID switches in camera re-entry scenarios |
 | **Tracking** | Per-class Kalman noise parameters | Motorcycles move differently from buses; class-specific motion models |
-| **Calibration** | Automatic GCP extraction from lane markings | Eliminates manual pixel-length measurement |
+| **Calibration** | GCP extraction from lane markings | Eliminates manual pixel-length measurement |
 | **Calibration** | Fisheye / radial distortion correction | Improves accuracy near frame edges for wide-angle lenses |
 | **Performance** | TensorRT engine export for GPU inference | 3–5× speedup, enabling near-real-time processing |
 | **Performance** | Batch tile inference (stack tiles into single YOLO call) | 2× speedup on tiling; reduces Python-level overhead |
@@ -416,7 +416,7 @@ traffic_tracking/
 ├── src/
 │   ├── tiling.py         ← Overlapping tile generation + class-aware NMS
 │   ├── detection.py      ← YOLOv8 wrapper with tiling support
-│   ├── tracker.py        ← ByteTrack implementation + Kalman filter
+-  ├── tracker.py        ← ByteTrack implementation + Kalman filter
 │   ├── smoothing.py      ← Moving-average and Kalman trajectory smoothers
 │   ├── homography.py     ← Pixel-to-metre coordinate mapping
 │   ├── export.py         ← CSV writer + annotated video exporter

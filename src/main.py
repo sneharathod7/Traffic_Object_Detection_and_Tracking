@@ -95,20 +95,32 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- Model / detection --------------------------------------------------
     det = p.add_argument_group("Detection")
     det.add_argument(
-        "--model", default="yolov8m.pt",
-        help="YOLOv8 weights file (e.g. yolov8m.pt, yolov8l.pt, or fine-tuned .pt).",
+        "--detector", choices=["yolov8", "sahi_rtdetr"], default="sahi_rtdetr",
+        help="Detector architecture to use.",
+    )
+    det.add_argument(
+        "--model", default=None,
+        help="Model weights file (defaults: rtdetr-l.pt for sahi_rtdetr, yolov8m.pt for yolov8).",
     )
     det.add_argument("--imgsz",  type=int,   default=1280, help="YOLO input image size.")
     det.add_argument("--conf",   type=float, default=0.25, help="Detection confidence threshold.")
     det.add_argument("--iou",    type=float, default=0.50, help="NMS IoU threshold.")
     det.add_argument(
         "--tile-grid", default="2x2",
-        help="Tiling grid as ROWSxCOLS (e.g. '2x2' or '3x3'). Use '1x1' to disable tiling.",
+        help="Tiling grid as ROWSxCOLS (e.g. '2x2' or '3x3') for YOLOv8. Use '1x1' to disable tiling.",
     )
     det.add_argument("--tile-overlap", type=float, default=0.20,
-                     help="Fractional overlap between adjacent tiles (0.0–0.4).")
+                     help="Fractional overlap between adjacent tiles (0.0–0.4) for YOLOv8.")
     det.add_argument("--tta", action="store_true",
-                     help="Enable test-time augmentation (slower, more accurate).")
+                     help="Enable test-time augmentation for YOLOv8 (slower, more accurate).")
+    det.add_argument("--slice-height", type=int, default=640,
+                     help="SAHI slice height.")
+    det.add_argument("--slice-width", type=int, default=640,
+                     help="SAHI slice width.")
+    det.add_argument("--overlap-height-ratio", type=float, default=0.20,
+                     help="SAHI slice overlap height ratio.")
+    det.add_argument("--overlap-width-ratio", type=float, default=0.20,
+                     help="SAHI slice overlap width ratio.")
     det.add_argument("--device", default=None,
                      help="Inference device: 'cuda', 'cpu', 'mps', or '0' for GPU index.")
 
@@ -218,21 +230,40 @@ def run(args: argparse.Namespace) -> dict:
         input_path.name, width, height, fps, total_frames,
     )
 
-    # ---- Build pipeline components ------------------------------------------
-    tile_grid = parse_tile_grid(args.tile_grid)
-    use_tiling = tile_grid != (1, 1)
+    # ---- Resolve model path based on detector -------------------------------
+    model_path = args.model
+    if model_path is None:
+        if args.detector == "sahi_rtdetr":
+            model_path = "rtdetr-l.pt"
+        else:
+            model_path = "yolov8m.pt"
 
-    detector = Detector(
-        model_path   = args.model,
-        imgsz        = args.imgsz,
-        conf         = args.conf,
-        iou          = args.iou,
-        use_tiling   = use_tiling,
-        tile_grid    = tile_grid,
-        tile_overlap = args.tile_overlap,
-        use_tta      = args.tta,
-        device       = args.device,
-    )
+    # ---- Build pipeline components ------------------------------------------
+    if args.detector == "sahi_rtdetr":
+        from sahi_rtdetr_detection import SahiRTDetrDetector
+        detector = SahiRTDetrDetector(
+            model_path           = model_path,
+            slice_height         = args.slice_height,
+            slice_width          = args.slice_width,
+            overlap_height_ratio = args.overlap_height_ratio,
+            overlap_width_ratio  = args.overlap_width_ratio,
+            conf                 = args.conf,
+            device               = args.device,
+        )
+    else:
+        tile_grid = parse_tile_grid(args.tile_grid)
+        use_tiling = tile_grid != (1, 1)
+        detector = Detector(
+            model_path   = model_path,
+            imgsz        = args.imgsz,
+            conf         = args.conf,
+            iou          = args.iou,
+            use_tiling   = use_tiling,
+            tile_grid    = tile_grid,
+            tile_overlap = args.tile_overlap,
+            use_tta      = args.tta,
+            device       = args.device,
+        )
 
     # Reset ByteTrack ID counter for reproducibility between runs
     STrack.reset_id_counter()
