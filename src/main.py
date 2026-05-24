@@ -232,7 +232,6 @@ def run(args: argparse.Namespace) -> dict:
         tile_overlap = args.tile_overlap,
         use_tta      = args.tta,
         device       = args.device,
-        tracker_high_thresh = args.high_thresh,
     )
 
     # Reset ByteTrack ID counter for reproducibility between runs
@@ -328,6 +327,8 @@ def run(args: argparse.Namespace) -> dict:
 
     elapsed = time.perf_counter() - t_start
 
+    diagnostics = tracker.get_diagnostics()
+
     stats = {
         "frames_processed":      frame_idx,
         "video_fps":             round(fps, 2),
@@ -342,8 +343,43 @@ def run(args: argparse.Namespace) -> dict:
         "coordinate_mode":       mapper.mode,
         "output_video":          output_video or "disabled",
         "output_csv":            output_csv,
+        "diagnostics":           diagnostics,
     }
     return stats
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics formatting helper
+# ---------------------------------------------------------------------------
+
+def format_diagnostics(d: dict) -> str:
+    """Format the tracking class diagnostics report as a readable string."""
+    lines = [
+        "========================================================",
+        "  TRACKING DIAGNOSTICS & CLASS STABILITY REPORT",
+        "========================================================",
+        f"  Total managed tracks          : {d['total_tracks']}",
+        f"  Mean class switches per track : {d['avg_switches']:.4f}",
+        f"  Max class switches per track  : {d['max_switches']}",
+        f"  Tracks with switches          : {d['switched_tracks_count']} / {d['total_tracks']} ({d['switched_tracks_pct']:.2f}%)",
+        f"  Car <-> Truck confusions      : {d['car_truck_confusions']}",
+        "",
+        "  Per-Class Confidence Distributions (Raw Detections):"
+    ]
+
+    conf_stats = d.get("confidence_stats", {})
+    if not conf_stats:
+        lines.append("    No detection history recorded.")
+    else:
+        for cname in sorted(conf_stats.keys()):
+            s = conf_stats[cname]
+            lines.append(
+                f"    {cname:<12} : mean={s['mean']:.4f}, std={s['std']:.4f}, "
+                f"min={s['min']:.4f}, max={s['max']:.4f}, count={s['count']}"
+            )
+
+    lines.append("========================================================")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +396,14 @@ def main() -> None:
 
     stats = run(args)
 
+    # Pop diagnostics so it doesn't print as a raw dict in format_stats
+    diagnostics = stats.pop("diagnostics", None)
+
     print(format_stats(stats))
+
+    if diagnostics:
+        print(format_diagnostics(diagnostics))
+
     print("\nDone. Review the annotated video and CSV for results.\n")
 
 

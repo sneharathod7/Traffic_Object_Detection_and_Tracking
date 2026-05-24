@@ -59,72 +59,6 @@ TRAFFIC_CLASSES: Dict[int, str] = {
     7: "truck",
 }
 
-DEFAULT_CLASS_THRESHOLDS: Dict[str, float] = {
-    "truck": 0.65,
-    "bus": 0.60,
-    "car": 0.35,
-    "motorcycle": 0.30,
-    "person": 0.35,
-}
-
-CLASS_PRIORITY: Dict[str, int] = {
-    "motorcycle": 0,
-    "car": 1,
-    "person": 2,
-    "bus": 3,
-    "truck": 4,
-}
-
-
-def _iou(box_a: List[float], box_b: List[float]) -> float:
-    """Compute IoU between two [x1, y1, x2, y2] boxes."""
-    x1 = max(box_a[0], box_b[0])
-    y1 = max(box_a[1], box_b[1])
-    x2 = min(box_a[2], box_b[2])
-    y2 = min(box_a[3], box_b[3])
-
-    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-    if inter == 0.0:
-        return 0.0
-
-    area_a = (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])
-    area_b = (box_b[2] - box_b[0]) * (box_b[3] - box_b[1])
-    union = area_a + area_b - inter
-    return inter / (union + 1e-7)
-
-
-def resolve_cross_class_overlaps(detections: List[Dict], iou_threshold: float = 0.45) -> List[Dict]:
-    """
-    Resolve overlapping detections of different classes on the same object.
-    
-    Greedily keeps detections belonging to higher-priority classes, suppressing
-    overlapping lower-priority classes (e.g. keeping 'car' over 'truck' / 'bus').
-    """
-    if not detections:
-        return []
-
-    # Sort detections so that higher priority classes (lower priority index) come first.
-    # For same priority class, sort by confidence descending.
-    sorted_dets = sorted(
-        detections,
-        key=lambda d: (CLASS_PRIORITY.get(d["class_name"], 99), -d["confidence"])
-    )
-
-    keep: List[Dict] = []
-    while sorted_dets:
-        best = sorted_dets.pop(0)
-        keep.append(best)
-
-        remaining: List[Dict] = []
-        for det in sorted_dets:
-            if _iou(best["bbox"], det["bbox"]) >= iou_threshold:
-                # Overlap exceeds threshold: suppress the lower priority box
-                continue
-            remaining.append(det)
-        sorted_dets = remaining
-
-    return keep
-
 
 def _auto_device() -> str:
     """Return the best available inference device."""
@@ -163,8 +97,6 @@ class Detector:
         tile_overlap: float = 0.2,
         use_tta: bool = False,
         device: Optional[str] = None,
-        class_thresholds: Optional[Dict[str, float]] = None,
-        tracker_high_thresh: float = 0.50,
     ) -> None:
         self.imgsz = imgsz
         self.conf = conf
@@ -175,15 +107,21 @@ class Detector:
         self.use_tta = use_tta
         self.device = device or _auto_device()
         self.target_classes = list(TRAFFIC_CLASSES.keys())
-        self.tracker_high_thresh = tracker_high_thresh
 
-        # Initialize class-specific thresholds
-        self.class_thresholds = dict(DEFAULT_CLASS_THRESHOLDS)
-        if class_thresholds:
-            self.class_thresholds.update(class_thresholds)
-
-        # Run inference with the minimum needed threshold to catch all candidate classes
-        self.model_conf = min(self.conf, min(self.class_thresholds.values()))
+        # Calibrated class-specific confidence thresholds
+        self.class_thresholds = {
+            "person": 0.25,
+            "motorcycle": 0.30,
+            "car": 0.35,
+            "bus": 0.40,
+            "truck": 0.45,
+        }
+        if conf != 0.25:
+            # Shift relative to the requested global confidence
+            diff = conf - 0.25
+            self.class_thresholds = {
+                k: max(0.01, v + diff) for k, v in self.class_thresholds.items()
+            }
 
         if "rtdetr" in model_path.lower():
             logger.info("Loading RT-DETR model '%s' on device '%s'", model_path, self.device)
@@ -193,10 +131,8 @@ class Detector:
             self.model = YOLO(model_path)
 
         self.model.to(self.device)
-        logger.info(
-            "Model loaded. imgsz=%d, conf=%.2f, model_conf=%.2f, iou=%.2f, tiling=%s, thresholds=%s",
-            imgsz, conf, self.model_conf, iou, use_tiling, self.class_thresholds
-        )
+        logger.info("Model loaded. imgsz=%d, conf=%.2f, iou=%.2f, tiling=%s",
+                    imgsz, conf, iou, use_tiling)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -211,7 +147,7 @@ class Detector:
         with torch.no_grad():
             inference_args = {
                 "imgsz": self.imgsz,
-                "conf": self.model_conf,
+                "conf": min(self.class_thresholds.values()),
                 "iou": self.iou,
                 "classes": self.target_classes,
                 "verbose": False,
@@ -231,22 +167,14 @@ class Detector:
                 confidence = float(box.conf[0])
                 class_name = TRAFFIC_CLASSES[class_id]
 
-                # 1. Class-aware confidence filtering
-                thresh = self.class_thresholds.get(class_name, self.conf)
-                if confidence < thresh:
+                # Filter by class-calibrated threshold
+                if confidence < self.class_thresholds.get(class_name, self.conf):
                     continue
-
-                # 2. Confidence mapping/boosting for tracker alignment
-                mapped_conf = confidence
-                if thresh < self.tracker_high_thresh:
-                    # Map [thresh, 1.0] -> [tracker_high_thresh, 1.0]
-                    mapped_conf = self.tracker_high_thresh + (confidence - thresh) * (1.0 - self.tracker_high_thresh) / (1.0 - thresh + 1e-7)
 
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().tolist()
                 detections.append({
                     "bbox":       [float(x1), float(y1), float(x2), float(y2)],
-                    "confidence": mapped_conf,
-                    "raw_confidence": confidence,
+                    "confidence": confidence,
                     "class_id":   class_id,
                     "class_name": class_name,
                 })
@@ -261,12 +189,11 @@ class Detector:
         Detect all traffic objects in *frame*, optionally using tiling.
 
         Pipeline when tiling is enabled:
-          1. Run YOLOv8 / RT-DETR on the full frame  → catches large objects.
+          1. Run YOLOv8 on the full frame  → catches large objects.
           2. Split frame into overlapping tiles.
-          3. Run detector on each tile       → catches small objects.
+          3. Run YOLOv8 on each tile       → catches small objects.
           4. Remap tile-space boxes to frame coordinates.
           5. Merge all detections and apply class-aware NMS.
-          6. Apply cross-class overlap resolution to suppress redundant classes.
 
         Args:
             frame: BGR numpy array (H × W × 3).
@@ -281,26 +208,23 @@ class Detector:
 
         if not self.use_tiling:
             logger.debug("Tiling disabled. Full-frame detections: %d", len(full_dets))
-            final = full_dets
-        else:
-            # Tile inference for small objects.
-            tiles = create_tiles(frame, grid=self.tile_grid, overlap=self.tile_overlap)
-            tile_dets: List[Dict] = []
-            for tile_info in tiles:
-                raw = self._run_yolo(tile_info["tile"])
-                remapped = remap_detections_to_frame(
-                    raw, tile_info["x_offset"], tile_info["y_offset"]
-                )
-                tile_dets.extend(remapped)
+            return full_dets
 
-            all_dets = full_dets + tile_dets
-            final = nms(all_dets, iou_threshold=self.iou)
+        # Tile inference for small objects.
+        tiles = create_tiles(frame, grid=self.tile_grid, overlap=self.tile_overlap)
+        tile_dets: List[Dict] = []
+        for tile_info in tiles:
+            raw = self._run_yolo(tile_info["tile"])
+            remapped = remap_detections_to_frame(
+                raw, tile_info["x_offset"], tile_info["y_offset"]
+            )
+            tile_dets.extend(remapped)
 
-        # Apply cross-class overlap resolution to suppress redundant/fighting classes
-        resolved = resolve_cross_class_overlaps(final, iou_threshold=0.45)
+        all_dets = full_dets + tile_dets
+        final = nms(all_dets, iou_threshold=self.iou, cross_class_iou_threshold=0.70)
 
         logger.debug(
-            "Detections — full=%d  tiles=%d  after_NMS=%d  after_resolution=%d",
-            len(full_dets), len(tile_dets) if self.use_tiling else 0, len(final), len(resolved),
+            "Detections — full=%d  tiles=%d  after_NMS=%d",
+            len(full_dets), len(tile_dets), len(final),
         )
-        return resolved
+        return final

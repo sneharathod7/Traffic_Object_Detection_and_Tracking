@@ -118,19 +118,33 @@ def remap_detections_to_frame(
 # Class-aware NMS
 # ---------------------------------------------------------------------------
 
-def nms(detections: List[Dict], iou_threshold: float = 0.45) -> List[Dict]:
+def nms(
+    detections: List[Dict],
+    iou_threshold: float = 0.45,
+    cross_class_iou_threshold: float = 0.70,
+) -> List[Dict]:
     """
     Class-aware Non-Maximum Suppression to remove duplicate detections
-    produced by overlapping tiles.
+    produced by overlapping tiles, with cross-class suppression for extremely
+    heavy overlaps (representing the same physical object).
 
     WHY CLASS-AWARE?
-    Suppression only happens between detections of the *same* class.
+    Suppression generally only happens between detections of the *same* class.
     A high-IoU (car, motorcycle) pair will NOT suppress each other, which
     prevents losing a two-wheeler parked right next to a car.
+
+    HOWEVER:
+    If two detections of different classes have an extremely high overlap
+    (IoU >= cross_class_iou_threshold), they represent the same physical
+    object with different class classifications. In this case, we suppress
+    the lower-confidence detection.
 
     Args:
         detections:    Merged list of all detections (across tiles + full frame).
         iou_threshold: Boxes with IoU > threshold and same class are duplicates.
+        cross_class_iou_threshold: Boxes of different classes with IoU >= this
+                                  threshold are considered duplicate detections of
+                                  the same physical object.
 
     Returns:
         Deduplicated detection list, best-confidence box kept per group.
@@ -148,11 +162,14 @@ def nms(detections: List[Dict], iou_threshold: float = 0.45) -> List[Dict]:
 
         remaining: List[Dict] = []
         for det in detections:
-            # Only suppress within the same class.
+            overlap = _iou(best["bbox"], det["bbox"])
             if det["class_id"] != best["class_id"]:
-                remaining.append(det)
+                # Suppress different classes if they overlap extremely heavily
+                if overlap < cross_class_iou_threshold:
+                    remaining.append(det)
                 continue
-            if _iou(best["bbox"], det["bbox"]) < iou_threshold:
+            
+            if overlap < iou_threshold:
                 remaining.append(det)
         detections = remaining
 
