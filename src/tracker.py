@@ -196,14 +196,6 @@ class STrack:
         self.class_id   = class_id
         self.class_name = class_name
 
-        # Rolling majority class stabilization history
-        self.class_id_to_name: Dict[int, str] = {class_id: class_name}
-        self.class_history: List[int] = [class_id]
-
-        # Diagnostics history
-        self.raw_class_history: List[int] = [class_id]
-        self.conf_history: List[float] = [score]
-
         self.state          = TrackState.New
         self.is_activated   = False
         self.tracklet_len   = 0
@@ -285,23 +277,6 @@ class STrack:
         self.start_frame  = frame_id
         self.tracklet_len = 1
 
-    def _update_class_state(self, class_id: int, class_name: str, score: float) -> None:
-        self.class_id_to_name[class_id] = class_name
-        self.class_history.append(class_id)
-        self.raw_class_history.append(class_id)
-        self.conf_history.append(score)
-
-        if len(self.class_history) > 25:
-            self.class_history.pop(0)
-
-        counts = {}
-        for cid in self.class_history:
-            counts[cid] = counts.get(cid, 0) + 1
-        majority_cid = max(counts, key=counts.get)
-
-        self.class_id = majority_cid
-        self.class_name = self.class_id_to_name[majority_cid]
-
     def re_activate(
         self,
         bbox_xyxy:  List[float],
@@ -313,7 +288,8 @@ class STrack:
         """Recover a previously Lost track."""
         self._kalman_correct(bbox_xyxy)
         self.score      = score
-        self._update_class_state(class_id, class_name, score)
+        self.class_id   = class_id
+        self.class_name = class_name
         self.state      = TrackState.Tracked
         self.lost_frames = 0
         self.frame_id   = frame_id
@@ -330,7 +306,8 @@ class STrack:
         """Update an active track with a new matched detection."""
         self._kalman_correct(bbox_xyxy)
         self.score      = score
-        self._update_class_state(class_id, class_name, score)
+        self.class_id   = class_id
+        self.class_name = class_name
         self.state      = TrackState.Tracked
         self.lost_frames = 0
         self.frame_id   = frame_id
@@ -413,7 +390,6 @@ class BYTETracker:
         self.tracked_stracks: List[STrack] = []
         self.lost_stracks:    List[STrack] = []
         self.frame_id = 0
-        self.all_stracks:     List[STrack] = []
 
         logger.info(
             "BYTETracker — high_thresh=%.2f  low_thresh=%.2f  match_thresh=%.2f  "
@@ -513,7 +489,6 @@ class BYTETracker:
                          det["class_id"], det["class_name"])
             nt.activate(self.frame_id)
             new_stracks.append(nt)
-            self.all_stracks.append(nt)
 
         # ---- Rebuild state lists --------------------------------------------
         self.tracked_stracks = (
@@ -568,68 +543,3 @@ class BYTETracker:
             len(output),
         )
         return output
-
-    def get_diagnostics(self) -> Dict:
-        """Calculate and return tracking class stability and confidence diagnostics."""
-        total_tracks = len(self.all_stracks)
-        if total_tracks == 0:
-            return {
-                "total_tracks": 0,
-                "avg_switches": 0.0,
-                "max_switches": 0,
-                "switched_tracks_count": 0,
-                "switched_tracks_pct": 0.0,
-                "car_truck_confusions": 0,
-                "confidence_stats": {},
-            }
-
-        total_switches = 0
-        max_switches = 0
-        switched_tracks_count = 0
-        car_truck_confusions = 0
-
-        # Confidences accumulated by class name
-        from collections import defaultdict
-        conf_by_class = defaultdict(list)
-
-        for t in self.all_stracks:
-            switches = 0
-            for i in range(1, len(t.raw_class_history)):
-                prev_c = t.raw_class_history[i-1]
-                curr_c = t.raw_class_history[i]
-                if prev_c != curr_c:
-                    switches += 1
-                    # Detect car (2) <-> truck (7) confusion
-                    if (prev_c == 2 and curr_c == 7) or (prev_c == 7 and curr_c == 2):
-                        car_truck_confusions += 1
-
-            total_switches += switches
-            if switches > max_switches:
-                max_switches = switches
-            if switches > 0:
-                switched_tracks_count += 1
-
-            for cid, conf in zip(t.raw_class_history, t.conf_history):
-                cname = t.class_id_to_name.get(cid, "unknown")
-                conf_by_class[cname].append(conf)
-
-        confidence_stats = {}
-        for cname, confs in conf_by_class.items():
-            confs_arr = np.array(confs)
-            confidence_stats[cname] = {
-                "count": len(confs),
-                "mean": float(np.mean(confs_arr)),
-                "std": float(np.std(confs_arr)) if len(confs_arr) > 1 else 0.0,
-                "min": float(np.min(confs_arr)),
-                "max": float(np.max(confs_arr)),
-            }
-
-        return {
-            "total_tracks": total_tracks,
-            "avg_switches": float(total_switches / total_tracks),
-            "max_switches": max_switches,
-            "switched_tracks_count": switched_tracks_count,
-            "switched_tracks_pct": float(100.0 * switched_tracks_count / total_tracks),
-            "car_truck_confusions": car_truck_confusions,
-            "confidence_stats": confidence_stats,
-        }

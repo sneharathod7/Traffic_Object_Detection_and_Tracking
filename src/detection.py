@@ -108,21 +108,6 @@ class Detector:
         self.device = device or _auto_device()
         self.target_classes = list(TRAFFIC_CLASSES.keys())
 
-        # Calibrated class-specific confidence thresholds
-        self.class_thresholds = {
-            "person": 0.25,
-            "motorcycle": 0.30,
-            "car": 0.35,
-            "bus": 0.40,
-            "truck": 0.45,
-        }
-        if conf != 0.25:
-            # Shift relative to the requested global confidence
-            diff = conf - 0.25
-            self.class_thresholds = {
-                k: max(0.01, v + diff) for k, v in self.class_thresholds.items()
-            }
-
         if "rtdetr" in model_path.lower():
             logger.info("Loading RT-DETR model '%s' on device '%s'", model_path, self.device)
             self.model = RTDETR(model_path)
@@ -147,7 +132,7 @@ class Detector:
         with torch.no_grad():
             inference_args = {
                 "imgsz": self.imgsz,
-                "conf": min(self.class_thresholds.values()),
+                "conf": self.conf,
                 "iou": self.iou,
                 "classes": self.target_classes,
                 "verbose": False,
@@ -164,19 +149,13 @@ class Detector:
                 class_id = int(box.cls[0])
                 if class_id not in TRAFFIC_CLASSES:
                     continue
-                confidence = float(box.conf[0])
-                class_name = TRAFFIC_CLASSES[class_id]
-
-                # Filter by class-calibrated threshold
-                if confidence < self.class_thresholds.get(class_name, self.conf):
-                    continue
-
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().tolist()
+                confidence = float(box.conf[0])
                 detections.append({
                     "bbox":       [float(x1), float(y1), float(x2), float(y2)],
                     "confidence": confidence,
                     "class_id":   class_id,
-                    "class_name": class_name,
+                    "class_name": TRAFFIC_CLASSES[class_id],
                 })
         return detections
 
@@ -221,7 +200,7 @@ class Detector:
             tile_dets.extend(remapped)
 
         all_dets = full_dets + tile_dets
-        final = nms(all_dets, iou_threshold=self.iou, cross_class_iou_threshold=0.70)
+        final = nms(all_dets, iou_threshold=self.iou)
 
         logger.debug(
             "Detections — full=%d  tiles=%d  after_NMS=%d",
