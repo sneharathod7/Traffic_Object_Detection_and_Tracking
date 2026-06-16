@@ -1,0 +1,271 @@
+{
+  "total_tracks": 128,
+  "suspicious_tracks_count": 24,
+  "suspicious_percentage": 18.75,
+  "top_20_suspicious_tracks": [
+    {
+      "track_id": 64,
+      "class_name": "car",
+      "duration": 60,
+      "suspicion_score": 0.3755,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.9183,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 1.0,
+      "reasons": [
+        "heading_jump",
+        "scale_jump"
+      ]
+    },
+    {
+      "track_id": 60,
+      "class_name": "motorcycle",
+      "duration": 60,
+      "suspicion_score": 0.3588,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.9779,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.6541,
+      "reasons": [
+        "heading_jump",
+        "scale_jump"
+      ]
+    },
+    {
+      "track_id": 46,
+      "class_name": "motorcycle",
+      "duration": 60,
+      "suspicion_score": 0.3,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 1.0,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 56,
+      "class_name": "person",
+      "duration": 60,
+      "suspicion_score": 0.2953,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.9842,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 41,
+      "class_name": "motorcycle",
+      "duration": 60,
+      "suspicion_score": 0.2934,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.9781,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 20,
+      "class_name": "motorcycle",
+      "duration": 59,
+      "suspicion_score": 0.2908,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.9692,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 17,
+      "class_name": "car",
+      "duration": 60,
+      "suspicion_score": 0.2884,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.9614,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 9,
+      "class_name": "bus",
+      "duration": 35,
+      "suspicion_score": 0.284,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.6134,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 1.0,
+      "reasons": [
+        "heading_jump",
+        "scale_jump"
+      ]
+    },
+    {
+      "track_id": 15,
+      "class_name": "car",
+      "duration": 60,
+      "suspicion_score": 0.2836,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.9455,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 45,
+      "class_name": "motorcycle",
+      "duration": 60,
+      "suspicion_score": 0.2809,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.9364,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 62,
+      "class_name": "motorcycle",
+      "duration": 60,
+      "suspicion_score": 0.2808,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.9359,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 52,
+      "class_name": "motorcycle",
+      "duration": 60,
+      "suspicion_score": 0.2806,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.9352,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 73,
+      "class_name": "person",
+      "duration": 57,
+      "suspicion_score": 0.2799,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.9331,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 116,
+      "class_name": "motorcycle",
+      "duration": 47,
+      "suspicion_score": 0.2747,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.9156,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 124,
+      "class_name": "car",
+      "duration": 43,
+      "suspicion_score": 0.2576,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.8587,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 31,
+      "class_name": "person",
+      "duration": 60,
+      "suspicion_score": 0.2536,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.8454,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 33,
+      "class_name": "car",
+      "duration": 60,
+      "suspicion_score": 0.2435,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.8115,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 117,
+      "class_name": "motorcycle",
+      "duration": 38,
+      "suspicion_score": 0.2342,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.665,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.3472,
+      "reasons": [
+        "heading_jump",
+        "scale_jump"
+      ]
+    },
+    {
+      "track_id": 6,
+      "class_name": "person",
+      "duration": 60,
+      "suspicion_score": 0.2301,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.7669,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    },
+    {
+      "track_id": 43,
+      "class_name": "motorcycle",
+      "duration": 60,
+      "suspicion_score": 0.2298,
+      "appearance_anomaly": 0.0,
+      "heading_anomaly": 0.7661,
+      "velocity_anomaly": 0.0,
+      "scale_anomaly": 0.0,
+      "reasons": [
+        "heading_jump"
+      ]
+    }
+  ]
+}

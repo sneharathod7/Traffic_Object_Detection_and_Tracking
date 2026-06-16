@@ -92,6 +92,99 @@ def run_diagnostics(csv_path: Path, annotations_dir: Path, output_metrics_dir: P
         "overall_fragmentation_gaps_count": fragmentation_events,
         "motorcycle_fragmentation_gaps_count": m_fragmentation_events,
     }
+
+    # 3b. Enhanced unsupervised metrics (no ground truth required)
+    logger.info("Computing enhanced tracking quality metrics...")
+
+    total_frames = int(df["frame"].max() - df["frame"].min() + 1) if len(df) > 0 else 1
+    total_tracks = df["track_id"].nunique()
+
+    # Fragmentation Rate: gaps per track per 100 frames
+    frag_rate = (fragmentation_events / max(1, total_tracks)) / max(1, total_frames) * 100.0
+
+    # Short-track analysis: tracks with duration < 10 frames (likely fragments)
+    short_tracks = durations[durations["duration"] < 10]
+    short_track_count = len(short_tracks)
+    short_track_pct = short_track_count / max(1, total_tracks) * 100.0
+
+    # ID Switch Proxy: count short-lived tracks that start within 50px of
+    # a recently-ended (within 5 frames) track of the same class.
+    # This heuristic identifies likely ID switches without ground truth.
+    logger.info("Computing ID switch proxy metric...")
+    switch_proxy_count = 0
+
+    # Build end-frame index: {(frame, class_name) -> [(cx, cy, track_id), ...]}
+    track_endpoints: Dict = {}
+    for (tid, cls_name), group in df.groupby(["track_id", "class_name"]):
+        frames = sorted(group["frame"].tolist())
+        duration = frames[-1] - frames[0] + 1
+
+        last_row = group[group["frame"] == frames[-1]].iloc[0]
+        end_cx = float(last_row["center_x"])
+        end_cy = float(last_row["center_y"])
+        end_frame = frames[-1]
+
+        if end_frame not in track_endpoints:
+            track_endpoints[end_frame] = []
+        track_endpoints[end_frame].append({
+            "track_id": tid, "class_name": cls_name,
+            "cx": end_cx, "cy": end_cy, "duration": duration,
+        })
+
+    # For each short track (<10 frames), check if a longer track ended near its start
+    for (tid, cls_name), group in df.groupby(["track_id", "class_name"]):
+        frames = sorted(group["frame"].tolist())
+        duration = frames[-1] - frames[0] + 1
+        if duration >= 10:
+            continue  # Not a short track
+
+        first_row = group[group["frame"] == frames[0]].iloc[0]
+        start_cx = float(first_row["center_x"])
+        start_cy = float(first_row["center_y"])
+        start_frame = frames[0]
+
+        # Search for tracks of the same class that ended within 5 frames before this one started
+        for check_frame in range(max(0, start_frame - 5), start_frame):
+            if check_frame not in track_endpoints:
+                continue
+            for ep in track_endpoints[check_frame]:
+                if ep["class_name"] != cls_name:
+                    continue
+                if ep["track_id"] == tid:
+                    continue
+                if ep["duration"] < 10:
+                    continue  # Ignore short-to-short matches
+                d = ((start_cx - ep["cx"]) ** 2 + (start_cy - ep["cy"]) ** 2) ** 0.5
+                if d < 50.0:
+                    switch_proxy_count += 1
+                    break
+            else:
+                continue
+            break
+
+    # Reactivation statistics from switch_log.json (if it exists)
+    reactivation_stats = {"attempted": 0, "file": "not found"}
+    switch_log_path = Path("outputs/metrics/switch_log.json")
+    if switch_log_path.exists():
+        try:
+            import json as _json
+            with open(switch_log_path, "r") as sl:
+                switch_data = _json.load(sl)
+            reactivation_stats = {
+                "total_switch_events_detected": switch_data.get("total_switch_events", 0),
+                "file": str(switch_log_path),
+            }
+        except Exception:
+            pass
+
+    metrics["enhanced_tracking_quality"] = {
+        "fragmentation_rate_per_100_frames": round(frag_rate, 4),
+        "short_tracks_count": short_track_count,
+        "short_tracks_percentage": round(short_track_pct, 2),
+        "id_switch_proxy_count": switch_proxy_count,
+        "reactivation_stats": reactivation_stats,
+        "total_frames": total_frames,
+    }
     
     # 4. Supervised precision/recall evaluation (if GT annotations exist)
     gt_files = sorted(list(annotations_dir.glob("frame_*.txt")))
@@ -242,7 +335,17 @@ def run_diagnostics(csv_path: Path, annotations_dir: Path, output_metrics_dir: P
     print("\n  TRACK FRAGMENTATION GAPS:")
     print(f"    Overall Fragmentation Gaps : {fragmentation_events}")
     print(f"    Motorcycle Gaps            : {m_fragmentation_events}")
-    
+
+    enh = metrics.get("enhanced_tracking_quality", {})
+    if enh:
+        print("\n  ENHANCED TRACKING QUALITY:")
+        print(f"    Frag Rate (per 100 frames) : {enh.get('fragmentation_rate_per_100_frames', 'N/A')}")
+        print(f"    Short Tracks (<10 frames)  : {enh.get('short_tracks_count', 0)} ({enh.get('short_tracks_percentage', 0):.1f}%)")
+        print(f"    ID Switch Proxy Count      : {enh.get('id_switch_proxy_count', 0)}")
+        rstat = enh.get("reactivation_stats", {})
+        if isinstance(rstat, dict) and "total_switch_events_detected" in rstat:
+            print(f"    Switch Events Detected     : {rstat['total_switch_events_detected']}")
+
     if gt_files:
         print("\n  SUPERVISED MOTORCYCLE PERFORMANCE:")
         print(f"    Motorcycle Recall          : {metrics['supervised_evaluation']['motorcycle_recall']*100.0:.2f}%")

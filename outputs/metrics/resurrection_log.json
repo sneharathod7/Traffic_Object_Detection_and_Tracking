@@ -1,0 +1,17 @@
+{
+  "total_resurrection_attempts": 1,
+  "events": [
+    {
+      "old_track_id": 27,
+      "candidate_track_id": 31,
+      "class": "car",
+      "gap": 3,
+      "appearance_score": 0.9129999876022339,
+      "trajectory_score": 0.2804,
+      "heading_score": 0.9476,
+      "memory_score": 0.9027,
+      "final_score": 0.727400004863739,
+      "decision": "rejected"
+    }
+  ]
+}

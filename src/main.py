@@ -40,11 +40,16 @@ from pathlib import Path
 import cv2
 from tqdm import tqdm
 
+try:
+    import yaml
+except ImportError:
+    yaml = None  # type: ignore
+
 from detection import Detector
 from export import Exporter
 from homography import CoordinateMapper
 from smoothing import MovingAverageSmoother
-from tracker import BYTETracker, STrack
+from tracker import BYTETracker, STrack, DEFAULT_ASSOCIATION_CONFIG
 from utils import ensure_dir, format_stats, setup_logging
 
 logger = logging.getLogger(__name__)
@@ -320,6 +325,34 @@ def run(args: argparse.Namespace) -> dict:
             device       = args.device,
         )
 
+    # ---- Load tracker configuration from config.yaml -------------------------
+    tracker_config = DEFAULT_ASSOCIATION_CONFIG.copy()
+    config_path = Path(args.config) if hasattr(args, 'config') and args.config else Path("config.yaml")
+    if not config_path.exists():
+        # Try relative to project root
+        config_path = Path(__file__).parent.parent / "config.yaml"
+    if config_path.exists() and yaml is not None:
+        try:
+            with open(config_path, "r", encoding="utf-8") as cf:
+                loaded = yaml.safe_load(cf)
+            if loaded:
+                # Deep merge: only override keys that exist in loaded config
+                for section in loaded:
+                    if section in tracker_config and isinstance(tracker_config[section], dict):
+                        tracker_config[section].update(loaded[section])
+                    else:
+                        tracker_config[section] = loaded[section]
+            logger.info("Loaded tracker config from %s", config_path)
+        except Exception as e:
+            logger.warning("Could not load config.yaml (%s). Using defaults.", e)
+    elif yaml is None:
+        logger.warning(
+            "PyYAML not installed. Install with 'pip install pyyaml' to use config.yaml. "
+            "Using built-in default configuration."
+        )
+    else:
+        logger.info("No config.yaml found. Using built-in default configuration.")
+
     # Reset ByteTrack ID counter for reproducibility between runs
     STrack.reset_id_counter()
     tracker = BYTETracker(
@@ -331,6 +364,7 @@ def run(args: argparse.Namespace) -> dict:
         motorcycle_track_buffer = args.motorcycle_track_buffer,
         motorcycle_match_thresh = args.motorcycle_match_thresh,
         device       = args.device,
+        config       = tracker_config,
     )
 
     smoother = MovingAverageSmoother(window=args.smooth_window)
@@ -448,6 +482,18 @@ def run(args: argparse.Namespace) -> dict:
                 )
 
     cap.release()
+
+    # Flush switch log (Stage 5)
+    try:
+        tracker.flush_switch_log()
+    except Exception as e:
+        logger.warning("Could not flush switch log (%s)", e)
+
+    # Flush resurrection log (Stage 6)
+    try:
+        tracker.flush_resurrection_log()
+    except Exception as e:
+        logger.warning("Could not flush resurrection log (%s)", e)
 
     elapsed = time.perf_counter() - t_start
 

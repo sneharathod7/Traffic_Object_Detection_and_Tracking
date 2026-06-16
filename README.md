@@ -9,13 +9,15 @@
 
 1. [Project Overview](#1-project-overview)
 2. [Problem Statement](#2-problem-statement)
-3. [Pipeline Explanation](#3-pipeline-explanation)
+3. [Pipeline Explanation (5 Steps)](#3-pipeline-explanation)
 4. [Design Decisions](#4-design-decisions)
 5. [Installation](#5-installation)
 6. [How to Run](#6-how-to-run)
 7. [Expected Output](#7-expected-output)
 8. [Future Improvements](#8-future-improvements)
 9. [Safety-Rule Integration (Placeholder)](#9-safety-rule-integration-placeholder)
+
+> **Deep-Dive Documentation**: Detailed technical explanations for each stage of the pipeline are available in the [`docs/`](docs/) directory.
 
 ---
 
@@ -57,52 +59,59 @@ This pipeline addresses all four problems with a coherent set of design decision
 
 ## 3. Pipeline Explanation
 
+For a deep dive into each step, read the full documentation in the `docs/` folder:
+1. [Detection (docs/1_detection.md)](docs/1_detection.md)
+2. [Tracking (docs/2_tracking.md)](docs/2_tracking.md)
+3. [Post-Processing (docs/3_postprocessing.md)](docs/3_postprocessing.md)
+4. [Homography (docs/4_homography.md)](docs/4_homography.md)
+5. [Export (docs/5_export.md)](docs/5_export.md)
+
 ```
 Input Video
     │
     ▼
 ┌─────────────────────────────────────────────────┐
-│  STEP 1 — DETECTION (detection.py + tiling.py)  │
+│  STEP 1 — DETECTION (SAHI + RT-DETR / YOLOv8)   │
 │                                                 │
 │  ┌─────────────┐   ┌──────────────────────────┐ │
 │  │ Full frame  │   │ Tiles (2×2 or 3×3 grid)  │ │
-│  │ YOLOv8m     │   │ YOLOv8m per tile         │ │
-│  │ imgsz=1280  │   │ same imgsz               │ │
+│  │ RT-DETR / YOLOv8m per tile                 │ │
 │  └──────┬──────┘   └────────────┬─────────────┘ │
 │         │                       │               │
 │         └───────────┬───────────┘               │
 │                     │                           │
-│             Class-aware NMS                     │
+│             SAHI NMS Fusion                     │
 │                     │                           │
 │         List[{bbox, conf, class}]               │
 └─────────────────────┬───────────────────────────┘
                       │
                       ▼
 ┌─────────────────────────────────────────────────┐
-│  STEP 2 — BYTETRACK (tracker.py)                │
+│  STEP 2 — TRACKER (10-Layer BoT-SORT/StrongSORT)│
 │                                                 │
-│  Stage 1: high-conf dets ↔ all known tracks     │
-│  Stage 2: low-conf dets  ↔ unmatched tracks     │
-│  Kalman prediction between frames               │
-│  Class-aware IoU cost matrix                    │
+│  • ResNet50 Appearance Extraction               │
+│  • DIoU + Motion + Appearance Cost Matrix       │
+│  • Adaptive Kalman Uncertainty & Track Buffer   │
+│  • OC-SORT Smoothing & Trajectory Recovery      │
+│  • IoU-NMS Ghost Suppression                    │
+│  • Nascent ID Switch Repair                     │
 │                                                 │
 │         List[{track_id, bbox, class}]           │
 └─────────────────────┬───────────────────────────┘
                       │
                       ▼
 ┌─────────────────────────────────────────────────┐
-│  STEP 3 — SMOOTHING (smoothing.py)              │
+│  STEP 3 — POSTPROCESSING (smoothing.py + classes│
 │                                                 │
-│  Moving-average (window=7) per track            │
-│  Removes high-frequency jitter from             │
-│  detection instability                          │
+│  • Relabel False Positive Cars → Motorcycles    │
+│  • Moving-average (window=7) per track          │
 │                                                 │
 │         smoothed (cx, cy) per track             │
 └─────────────────────┬───────────────────────────┘
                       │
                       ▼
 ┌─────────────────────────────────────────────────┐
-│  STEP 4 — COORDINATE MAPPING (homography.py)   │
+│  STEP 4 — COORDINATE MAPPING (homography.py)    │
 │                                                 │
 │  scale [m/px] = real_car_m / pixel_car_px       │
 │  world_x = cx × scale                           │
@@ -147,20 +156,18 @@ Each tile covers 1920×1080 pixels, downsampled to 1280×1280, so the same car b
 
 The overlap (default 20%) prevents objects straddling a tile boundary from being cut in half. A final class-aware NMS step removes duplicates introduced by the overlap.
 
-### 4.4 ByteTrack — Why it outperforms SORT in crowded scenes
+### 4.4 The 10-Layer Tracker — Why SORT / ByteTrack is not enough
 
-**SORT** associates only high-confidence detections with existing tracks. In a dense intersection, 30–50% of objects are partially occluded at any frame. Their YOLO confidence drops below the threshold, causing SORT to lose them and assign new IDs when they reappear — resulting in hundreds of spurious ID switches per minute.
+Standard trackers fail heavily in dense Indian traffic due to identical-looking vehicles passing behind overlapping shadows and causing bounding box collisions.
 
-**ByteTrack** introduces a second association stage:
+We heavily modified a standard ByteTrack implementation into a **10-Layer BoT-SORT / StrongSORT hybrid**. Some of the key layers include:
 
-```
-Stage 1: high-conf dets ↔ all tracks  (match clear detections)
-Stage 2:  low-conf dets ↔ remaining   (recover occluded objects)
-```
+- **Distance-IoU (DIoU) Matching:** Active penalization for box centers drifting apart, mathematically blocking identical overlapping boxes from "stealing" track IDs.
+- **Tri-Modal Appearance Extraction:** A `ResNet50` + 3D HSV Color Histogram pass computes exactly what every single car/motorcycle looks like, solving occlusion ambiguity.
+- **OC-SORT Observation-Centric Recovery:** If a track is lost behind a tree, its Kalman filter will drift wildly. When re-detected, the tracker reconstructs the true velocity vector across the gap to snap the physics model back to reality.
+- **IoU-NMS Ghost Suppression & ID Repair:** We automatically purge duplicated detections from SAHI tiling boundaries and retroactively repair 1-frame ID switches.
 
-Low-confidence detections that would be discarded by SORT instead confirm that an existing track is still present, even if partially occluded. In practice this **reduces ID switches by 30–60%** in dense scenes, which is critical for computing time-to-collision and trajectory-based safety rules.
-
-**Class-aware matching**: The IoU cost between a `car` detection and a `motorcycle` track is set to infinity (no match possible). This prevents the extremely common failure mode where a stationary motorcycle "steals" the ID of a nearby car when the car is temporarily occluded.
+See [docs/2_tracking.md](docs/2_tracking.md) for a full breakdown of the 10 layers.
 
 ### 4.5 Trajectory Smoothing — Why it is critical for safety analysis
 

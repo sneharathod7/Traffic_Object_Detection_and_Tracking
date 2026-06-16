@@ -1,0 +1,48 @@
+association:
+  direction_min_history: 5
+  gate_default: 2.5
+  gate_motorcycle: 4.5
+  weights:
+    appearance: 0.2
+    direction: 0.2
+    iou: 0.3
+    motion: 0.1
+    scale: 0.05
+    trajectory: 0.15
+recovery:
+  extrapolation_max_gap: 30
+  extrapolation_radius_factor: 1.5
+  memory_tau_bus: 15.0
+  memory_tau_car: 20.0
+  memory_tau_default: 20.0
+  memory_tau_motorcycle: 25.0
+  memory_tau_person: 15.0
+  use_extrapolation: true
+reliability:
+  age_weight: 0.2
+  appearance_weight: 0.3
+  association_weight: 0.2
+  min_reliable: 0.4
+  trajectory_weight: 0.3
+resurrection:
+  enabled: true
+  log_threshold: 0.7
+  logging:
+    enabled: true
+    output_path: outputs/metrics/resurrection_log.json
+  max_gap: 20
+  motorcycle_app_threshold: 0.9
+  score_threshold: 0.85
+  weights:
+    appearance: 0.45
+    heading: 0.15
+    memory: 0.1
+    trajectory: 0.3
+switch_logging:
+  enabled: true
+  output_path: outputs/metrics/switch_log.json
+trajectory:
+  heading_buffer_size: 10
+  heading_smoothing_window: 5
+  position_buffer_size: 30
+  velocity_buffer_size: 10

@@ -56,7 +56,11 @@ KALMAN FILTER STATE
 from __future__ import annotations
 
 import enum
+import json
 import logging
+import math
+from collections import deque
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # pyrefly: ignore [missing-import]
@@ -67,6 +71,53 @@ from scipy.optimize import linear_sum_assignment
 from reid import ReIDExtractor, compute_appearance_distance
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Default association config (overridden by config.yaml when loaded)
+# ---------------------------------------------------------------------------
+
+DEFAULT_ASSOCIATION_CONFIG: Dict = {
+    "association": {
+        "weights": {
+            "iou": 0.30,
+            "appearance": 0.20,
+            "direction": 0.20,
+            "trajectory": 0.15,
+            "motion": 0.10,
+            "scale": 0.05,
+        },
+        "gate_motorcycle": 4.5,
+        "gate_default": 2.5,
+        "direction_min_history": 5,
+    },
+    "trajectory": {
+        "position_buffer_size": 30,
+        "velocity_buffer_size": 10,
+        "heading_buffer_size": 10,
+        "heading_smoothing_window": 5,
+    },
+    "recovery": {
+        "use_extrapolation": True,
+        "extrapolation_max_gap": 30,
+        "extrapolation_radius_factor": 1.5,
+        "memory_tau_car": 20.0,
+        "memory_tau_motorcycle": 25.0,
+        "memory_tau_bus": 15.0,
+        "memory_tau_person": 15.0,
+        "memory_tau_default": 20.0,
+    },
+    "reliability": {
+        "age_weight": 0.20,
+        "appearance_weight": 0.30,
+        "trajectory_weight": 0.30,
+        "association_weight": 0.20,
+        "min_reliable": 0.40,
+    },
+    "switch_logging": {
+        "enabled": True,
+        "output_path": "outputs/metrics/switch_log.json",
+    },
+}
 
 
 # ---------------------------------------------------------------------------
@@ -164,28 +215,107 @@ def diou_matrix(
     return diou
 
 
+def _compute_direction_cost(det_cx: float, det_cy: float,
+                            trk: "STrack",
+                            min_history: int = 5) -> float:
+    """
+    Compute heading consistency cost between a detection and a track.
+    Returns 0.0 (perfect match) to 1.0 (opposite directions).
+    Uses multi-frame heading from the track's heading_buffer.
+    """
+    if len(trk.trajectory_buffer) < min_history:
+        return 0.5  # Neutral — not enough history to judge
+
+    # Detection's implied heading relative to track's last position
+    last_cx, last_cy, _ = trk.trajectory_buffer[-1]
+    dx = det_cx - last_cx
+    dy = det_cy - last_cy
+    if abs(dx) < 0.5 and abs(dy) < 0.5:
+        return 0.0  # Essentially stationary — any direction is fine
+
+    det_heading = math.atan2(dy, dx)
+    trk_heading = trk.avg_heading
+
+    # Angular difference in [0, pi]
+    diff = abs(det_heading - trk_heading)
+    if diff > math.pi:
+        diff = 2 * math.pi - diff
+
+    # Normalize to [0, 1]
+    return diff / math.pi
+
+
+def _compute_trajectory_cost(det_cx: float, det_cy: float,
+                             trk: "STrack") -> float:
+    """
+    How well does the detection align with the track's extrapolated trajectory?
+    Returns 0.0 (exactly on extrapolated path) to 1.0 (far off path).
+    """
+    if len(trk.trajectory_buffer) < 3:
+        return 0.5  # Neutral
+
+    # Extrapolate from last position using average velocity
+    last_cx, last_cy, last_frame = trk.trajectory_buffer[-1]
+    vx, vy = trk.avg_velocity
+    # Assume detection is 1 frame ahead
+    pred_cx = last_cx + vx
+    pred_cy = last_cy + vy
+
+    d = math.hypot(det_cx - pred_cx, det_cy - pred_cy)
+
+    # Normalize by track bounding box size
+    bbox = trk.bbox_xyxy
+    sz = max(1.0, max(bbox[2] - bbox[0], bbox[3] - bbox[1]))
+    return min(1.0, d / (2.0 * sz))
+
+
+def _compute_scale_cost(det_bbox: List[float], trk: "STrack") -> float:
+    """
+    Bounding box area ratio cost. Returns 0.0 (same size) to 1.0 (very different).
+    """
+    det_area = max(1.0, (det_bbox[2] - det_bbox[0]) * (det_bbox[3] - det_bbox[1]))
+    trk_area = max(1.0, trk.bbox_area_ema) if trk.bbox_area_ema > 0 else det_area
+    ratio = max(det_area, trk_area) / min(det_area, trk_area)
+    # ratio >= 1.0; map to [0, 1] with soft saturation
+    return min(1.0, (ratio - 1.0) / 2.0)
+
+
 def hungarian_match(
     detections: List[Dict],
     tracks: List["STrack"],
     distance_threshold: float,
     class_aware: bool = True,
     motorcycle_match_thresh: float = 0.70,
+    config: Optional[Dict] = None,
 ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
     """
-    Solve the assignment problem and return valid matches.
+    6-component assignment: DIoU + Motion + Appearance + Direction + Trajectory + Scale.
 
     Args:
-        detections:          List of detection dicts with 'bbox', 'class_id', and optional 'emb'.
+        detections:          List of detection dicts with 'bbox', 'class_id', optional 'emb'.
         tracks:              List of STrack objects.
-        distance_threshold:  Maximum *IoU-distance* (= 1 − IoU) to accept a match for other classes.
+        distance_threshold:  Max cost to accept a match (non-motorcycle).
         class_aware:         If True, cross-class pairs are never matched.
-        motorcycle_match_thresh: Maximum distance threshold to accept a motorcycle match.
+        motorcycle_match_thresh: Max cost for motorcycle matches.
+        config:              Association config dict (from config.yaml).
 
     Returns:
         (matches, unmatched_det_indices, unmatched_trk_indices)
     """
     if not detections or not tracks:
         return [], list(range(len(detections))), list(range(len(tracks)))
+
+    cfg = (config or DEFAULT_ASSOCIATION_CONFIG).get("association", {})
+    weights = cfg.get("weights", DEFAULT_ASSOCIATION_CONFIG["association"]["weights"])
+    w_iou = weights.get("iou", 0.30)
+    w_app = weights.get("appearance", 0.20)
+    w_dir = weights.get("direction", 0.20)
+    w_traj = weights.get("trajectory", 0.15)
+    w_mot = weights.get("motion", 0.10)
+    w_scl = weights.get("scale", 0.05)
+    G_moto = cfg.get("gate_motorcycle", 4.5)
+    G_default = cfg.get("gate_default", 2.5)
+    dir_min_hist = cfg.get("direction_min_history", 5)
 
     det_boxes = np.array([d["bbox"] for d in detections], dtype=np.float32)
     trk_boxes = np.array([t.bbox_xyxy for t in tracks],   dtype=np.float32)
@@ -197,15 +327,12 @@ def hungarian_match(
     cross_class = det_cls[:, np.newaxis] != trk_cls[np.newaxis, :]
 
     if class_aware:
-        diou_mat[cross_class] = -1.0 # Max distance for cross-class
+        diou_mat[cross_class] = -1.0
     else:
-        # Soft penalty: reduces effective DIoU by 0.2 for cross-class matches
         diou_mat[cross_class] = np.maximum(-1.0, diou_mat[cross_class] - 0.2)
 
-    # Build the distance/cost matrix. Since DIoU ranges [-1, 1], cost ranges [0, 2].
-    cost = 1.0 - diou_mat
+    cost = np.ones((len(detections), len(tracks)), dtype=np.float64)
 
-    # Apply Motion Gating and Appearance Fusion
     for r in range(len(detections)):
         det = detections[r]
         det_bbox = det["bbox"]
@@ -219,7 +346,6 @@ def hungarian_match(
                 cost[r, c] = 1.0
                 continue
 
-            # Kalman predicted center and track bounding box size
             trk_cx, trk_cy = trk.center
             trk_bbox = trk.bbox_xyxy
             trk_w = trk_bbox[2] - trk_bbox[0]
@@ -228,28 +354,43 @@ def hungarian_match(
 
             d_center = np.hypot(det_cx - trk_cx, det_cy - trk_cy)
 
-            # Class-aware motion gating limit G
-            if det_cls_id == 3:  # motorcycle
-                G = 4.5 * sz
-            else:
-                G = 2.5 * sz
+            G = G_moto * sz if det_cls_id == 3 else G_default * sz
 
             if d_center > G:
-                # Gate match out
                 cost[r, c] = 1.0
-            else:
-                # ALL classes appearance fusion
-                # Motion consistency cost component
-                cost_motion = d_center / G
-                
-                # Appearance cost component (deep + color hist)
-                if "emb" in det and trk.curr_emb is not None:
-                    d_app = compute_appearance_distance(det["emb"], trk.curr_emb)
-                else:
-                    d_app = 0.5  # Neutral default
+                continue
 
-                # Fused cost formula: 40% DIoU distance, 20% Motion penalty, 40% Appearance distance
-                cost[r, c] = 0.4 * (1.0 - diou_mat[r, c]) + 0.2 * cost_motion + 0.4 * d_app
+            # Component 1: DIoU
+            c_iou = 1.0 - diou_mat[r, c]  # [0, 2] range, clamp to [0, 1]
+            c_iou = min(1.0, max(0.0, c_iou))
+
+            # Component 2: Motion distance
+            c_mot = d_center / G
+
+            # Component 3: Appearance
+            if "emb" in det and trk.curr_emb is not None:
+                c_app = compute_appearance_distance(det["emb"], trk.curr_emb)
+            else:
+                c_app = 0.5
+
+            # Component 4: Direction consistency
+            c_dir = _compute_direction_cost(det_cx, det_cy, trk, dir_min_hist)
+
+            # Component 5: Trajectory consistency
+            c_traj = _compute_trajectory_cost(det_cx, det_cy, trk)
+
+            # Component 6: Scale consistency
+            c_scl = _compute_scale_cost(det_bbox, trk)
+
+            # Fused 6-component cost
+            cost[r, c] = (
+                w_iou  * c_iou +
+                w_mot  * c_mot +
+                w_app  * c_app +
+                w_dir  * c_dir +
+                w_traj * c_traj +
+                w_scl  * c_scl
+            )
 
     row_ind, col_ind = linear_sum_assignment(cost)
 
@@ -294,9 +435,12 @@ class STrack:
         score:      float,
         class_id:   int,
         class_name: str,
+        config:     Optional[Dict] = None,
     ) -> None:
         STrack._id_counter += 1
         self.track_id   = STrack._id_counter
+        self.original_id = self.track_id
+        self.resurrection_parent: Optional[int] = None
         self.score      = score
         self.class_id   = class_id
         self.class_name = class_name
@@ -310,13 +454,33 @@ class STrack:
         self.start_frame    = 0
         self.lost_frames    = 0
         self.last_reactivated_frame = -1
-        
+
         # OCSORT: Keep track of the last confident observation
         x1, y1, x2, y2 = bbox_xyxy
         self.last_valid_cx = (x1 + x2) / 2.0
         self.last_valid_cy = (y1 + y2) / 2.0
 
         self.curr_emb: Optional[Dict[str, np.ndarray]] = None
+
+        # --- Stage 1: Trajectory Memory ---
+        traj_cfg = (config or DEFAULT_ASSOCIATION_CONFIG).get("trajectory", {})
+        pos_buf = traj_cfg.get("position_buffer_size", 30)
+        vel_buf = traj_cfg.get("velocity_buffer_size", 10)
+        hdg_buf = traj_cfg.get("heading_buffer_size", 10)
+
+        self.trajectory_buffer: deque = deque(maxlen=pos_buf)
+        self.velocity_buffer: deque   = deque(maxlen=vel_buf)
+        self.heading_buffer: deque    = deque(maxlen=hdg_buf)
+        self.bbox_area_ema: float     = max(1.0, (x2 - x1) * (y2 - y1))
+
+        # Computed trajectory properties (cached per frame)
+        self.avg_velocity: Tuple[float, float] = (0.0, 0.0)
+        self.avg_heading: float = 0.0
+
+        # --- Stage 4: Reliability score ---
+        self.reliability_score: float = 0.1  # starts low, grows with evidence
+        self._appearance_consistency: float = 1.0  # running consistency
+        self._association_streak: int = 0  # consecutive matched frames
 
         self._init_kalman(bbox_xyxy)
 
@@ -438,6 +602,77 @@ class STrack:
         if self.state == TrackState.Lost:
             self.lost_frames += 1
 
+    def _update_trajectory(self, cx: float, cy: float, frame_id: int) -> None:
+        """Push a new observation into trajectory/velocity/heading buffers."""
+        if self.trajectory_buffer:
+            prev_cx, prev_cy, prev_frame = self.trajectory_buffer[-1]
+            dt = max(1, frame_id - prev_frame)
+            vx = (cx - prev_cx) / dt
+            vy = (cy - prev_cy) / dt
+            self.velocity_buffer.append((vx, vy))
+
+            heading = math.atan2(vy, vx)
+            self.heading_buffer.append(heading)
+
+        self.trajectory_buffer.append((cx, cy, frame_id))
+
+        # Update cached averages
+        if self.velocity_buffer:
+            vels = np.array(self.velocity_buffer)
+            self.avg_velocity = (float(np.mean(vels[:, 0])),
+                                 float(np.mean(vels[:, 1])))
+        if self.heading_buffer:
+            # Circular mean for headings
+            sins = sum(math.sin(h) for h in self.heading_buffer)
+            coss = sum(math.cos(h) for h in self.heading_buffer)
+            self.avg_heading = math.atan2(sins, coss)
+
+    def _update_reliability(self, confidence: float) -> None:
+        """Update the reliability score based on accumulated evidence."""
+        rel_cfg = DEFAULT_ASSOCIATION_CONFIG.get("reliability", {})
+        w_age = rel_cfg.get("age_weight", 0.20)
+        w_app = rel_cfg.get("appearance_weight", 0.30)
+        w_traj = rel_cfg.get("trajectory_weight", 0.30)
+        w_assoc = rel_cfg.get("association_weight", 0.20)
+
+        # Age component: saturates at ~60 frames
+        age_score = min(1.0, self.tracklet_len / 60.0)
+
+        # Appearance consistency: tracks with stable appearance are reliable
+        app_score = self._appearance_consistency
+
+        # Trajectory smoothness: low velocity variance = smooth = reliable
+        if len(self.velocity_buffer) >= 3:
+            vels = np.array(self.velocity_buffer)
+            speed_std = float(np.std(np.linalg.norm(vels, axis=1)))
+            traj_score = max(0.0, 1.0 - speed_std / 5.0)
+        else:
+            traj_score = 0.5
+
+        # Association stability: consecutive frames matched
+        assoc_score = min(1.0, self._association_streak / 10.0)
+
+        self.reliability_score = (
+            w_age * age_score +
+            w_app * app_score +
+            w_traj * traj_score +
+            w_assoc * assoc_score
+        )
+
+    def get_memory_score(self) -> float:
+        """Stage 4: Confidence-decaying memory score for lost tracks."""
+        rec_cfg = DEFAULT_ASSOCIATION_CONFIG.get("recovery", {})
+        cls_taus = {
+            2: rec_cfg.get("memory_tau_car", 20.0),
+            3: rec_cfg.get("memory_tau_motorcycle", 25.0),
+            5: rec_cfg.get("memory_tau_bus", 15.0),
+            0: rec_cfg.get("memory_tau_person", 15.0),
+        }
+        tau = cls_taus.get(self.class_id, rec_cfg.get("memory_tau_default", 20.0))
+        # Scale tau by reliability — reliable tracks decay slower
+        tau = tau * (0.5 + self.reliability_score)
+        return math.exp(-self.lost_frames / max(1.0, tau))
+
     def activate(self, frame_id: int) -> None:
         """Confirm a brand-new track."""
         self.state        = TrackState.Tracked
@@ -477,11 +712,17 @@ class STrack:
 
         self._kalman_correct(bbox_xyxy, score)
         self.score = score
-        
+
         # Update last valid position
-        self.last_valid_cx = (bbox_xyxy[0] + bbox_xyxy[2]) / 2.0
-        self.last_valid_cy = (bbox_xyxy[1] + bbox_xyxy[3]) / 2.0
-        
+        cx = (bbox_xyxy[0] + bbox_xyxy[2]) / 2.0
+        cy = (bbox_xyxy[1] + bbox_xyxy[3]) / 2.0
+        self.last_valid_cx = cx
+        self.last_valid_cy = cy
+
+        # Update trajectory memory
+        self._update_trajectory(cx, cy, frame_id)
+        self.bbox_area_ema = 0.9 * self.bbox_area_ema + 0.1 * max(1.0, (bbox_xyxy[2] - bbox_xyxy[0]) * (bbox_xyxy[3] - bbox_xyxy[1]))
+
         # Majority class voting
         self.class_name_map[class_id] = class_name
         self.class_history[class_id] = self.class_history.get(class_id, 0) + 1
@@ -493,6 +734,8 @@ class STrack:
         self.frame_id   = frame_id
         self.tracklet_len += 1
         self.last_reactivated_frame = frame_id
+        self._association_streak += 1
+        self._update_reliability(score)
         if emb is not None:
             self.update_appearance(emb)
 
@@ -508,11 +751,17 @@ class STrack:
         """Update an active track with a new matched detection."""
         self._kalman_correct(bbox_xyxy, score)
         self.score = score
-        
+
         # Update last valid position
-        self.last_valid_cx = (bbox_xyxy[0] + bbox_xyxy[2]) / 2.0
-        self.last_valid_cy = (bbox_xyxy[1] + bbox_xyxy[3]) / 2.0
-        
+        cx = (bbox_xyxy[0] + bbox_xyxy[2]) / 2.0
+        cy = (bbox_xyxy[1] + bbox_xyxy[3]) / 2.0
+        self.last_valid_cx = cx
+        self.last_valid_cy = cy
+
+        # Update trajectory memory
+        self._update_trajectory(cx, cy, frame_id)
+        self.bbox_area_ema = 0.9 * self.bbox_area_ema + 0.1 * max(1.0, (bbox_xyxy[2] - bbox_xyxy[0]) * (bbox_xyxy[3] - bbox_xyxy[1]))
+
         # Majority class voting
         self.class_name_map[class_id] = class_name
         self.class_history[class_id] = self.class_history.get(class_id, 0) + 1
@@ -523,6 +772,8 @@ class STrack:
         self.lost_frames = 0
         self.frame_id   = frame_id
         self.tracklet_len += 1
+        self._association_streak += 1
+        self._update_reliability(score)
         if emb is not None:
             self.update_appearance(emb)
 
@@ -530,6 +781,7 @@ class STrack:
         """Mark this track as lost (not matched this frame)."""
         self.state       = TrackState.Lost
         self.lost_frames = 0
+        self._association_streak = 0  # Reset streak on loss
 
     def get_max_lost_frames(self, base_buffer: int, motorcycle_buffer: int) -> int:
         """Dynamically scale the allowed lost buffer (Layer 5: Adaptive Track Buffer)."""
@@ -614,6 +866,7 @@ class BYTETracker:
         motorcycle_track_buffer: int = 60,
         motorcycle_match_thresh: float = 0.70,
         device: Optional[str] = None,
+        config: Optional[Dict] = None,
     ) -> None:
         self.high_thresh  = high_thresh
         self.low_thresh   = low_thresh
@@ -628,6 +881,28 @@ class BYTETracker:
         self.tracked_stracks: List[STrack] = []
         self.lost_stracks:    List[STrack] = []
         self.frame_id = 0
+
+        # Configuration
+        self.config = config or DEFAULT_ASSOCIATION_CONFIG
+
+        # Stage 5: Switch logging
+        self._switch_log: List[Dict] = []
+        sw_cfg = self.config.get("switch_logging", {})
+        self._switch_logging_enabled = sw_cfg.get("enabled", True)
+        self._switch_log_path = sw_cfg.get("output_path", "outputs/metrics/switch_log.json")
+
+        # Stage 6: Resurrection parameters
+        res_cfg = self.config.get("resurrection", {})
+        self.resurrection_enabled = res_cfg.get("enabled", True)
+        self.resurrection_max_gap = res_cfg.get("max_gap", 20)
+        self.resurrection_score_threshold = res_cfg.get("score_threshold", 0.85)
+        self.resurrection_log_threshold = res_cfg.get("log_threshold", 0.70)
+        self.resurrection_motorcycle_app = res_cfg.get("motorcycle_app_threshold", 0.90)
+        self.resurrection_weights = res_cfg.get("weights", {"appearance": 0.45, "trajectory": 0.30, "heading": 0.15, "memory": 0.10})
+        log_cfg = res_cfg.get("logging", {})
+        self.resurrection_logging_enabled = log_cfg.get("enabled", True)
+        self.resurrection_log_path = log_cfg.get("output_path", "outputs/metrics/resurrection_log.json")
+        self._resurrection_log: List[Dict] = []
 
         # Initialize appearance feature extractor
         self.reid_extractor = ReIDExtractor(device=device)
@@ -700,6 +975,7 @@ class BYTETracker:
             distance_threshold=self.match_thresh,
             class_aware=self.class_aware,
             motorcycle_match_thresh=self.motorcycle_match_thresh,
+            config=self.config,
         )
 
         activated_ids: set = set()
@@ -781,23 +1057,43 @@ class BYTETracker:
                 if not (0.6 <= det_w / t_w <= 1.6) or not (0.6 <= det_h / t_h <= 1.6):
                     continue
 
-                # OCSORT OCR: Spatial distance using last valid observation!
-                d_spatial = np.hypot(det_cx - t.last_valid_cx, det_cy - t.last_valid_cy)
-                
-                # Dynamic search radius based on gap and object size
-                max_dist = max(3.0 * sz, 1.5 * sz * np.sqrt(curr_gap))
+                # Stage 3: Velocity extrapolation — predict expected position
+                rec_cfg = self.config.get("recovery", {})
+                use_extrap = rec_cfg.get("use_extrapolation", True)
+                extrap_factor = rec_cfg.get("extrapolation_radius_factor", 1.5)
+
+                if use_extrap and t.avg_velocity != (0.0, 0.0):
+                    pred_cx = t.last_valid_cx + t.avg_velocity[0] * curr_gap
+                    pred_cy = t.last_valid_cy + t.avg_velocity[1] * curr_gap
+                else:
+                    pred_cx = t.last_valid_cx
+                    pred_cy = t.last_valid_cy
+
+                d_spatial = np.hypot(det_cx - pred_cx, det_cy - pred_cy)
+
+                # Dynamic search radius
+                max_dist = max(3.0 * sz, extrap_factor * sz * np.sqrt(curr_gap))
                 if d_spatial > max_dist:
                     continue
 
-                # Appearance similarity check (if available, e.g., motorcycles)
+                # Stage 4: Memory score for confidence-decaying track memory
+                mem_score = t.get_memory_score()
+
+                # Appearance similarity check
                 if "emb" in det and t.curr_emb is not None:
                     d_app = compute_appearance_distance(det["emb"], t.curr_emb)
                     if d_app >= 0.35:
                         continue
-                    recon_score = (1.0 - d_app) * (1.0 - d_spatial / max_dist) - class_penalty
+                    recon_score = mem_score * (1.0 - d_app) * (1.0 - d_spatial / max_dist) - class_penalty
                 else:
-                    # Spatial-only score
-                    recon_score = (1.0 - d_spatial / max_dist) - class_penalty
+                    recon_score = mem_score * (1.0 - d_spatial / max_dist) - class_penalty
+
+                # Direction consistency bonus/penalty for OCR
+                if len(t.heading_buffer) >= 3:
+                    dir_cost = _compute_direction_cost(det_cx, det_cy, t, 3)
+                    if dir_cost > 0.7:  # Nearly opposite direction — reject
+                        continue
+                    recon_score *= (1.0 - 0.3 * dir_cost)  # Small direction bonus
 
                 if recon_score > best_recon_score and recon_score > 0.1:
                     best_recon_score = recon_score
@@ -819,16 +1115,24 @@ class BYTETracker:
 
         unmatched_high = [i for i in unmatched_high if i not in reconnected_det_indices]
 
+        # ---- Stage 5: Detect potential ID switches -------------------------
+        if self._switch_logging_enabled:
+            self._detect_switches(dets_high, unmatched_high, all_known)
+
         # ---- Initialise new tracks from unmatched high-conf dets -----------
         new_stracks: List[STrack] = []
         for d_idx in unmatched_high:
             det = dets_high[d_idx]
             nt  = STrack(det["bbox"], det["confidence"],
-                         det["class_id"], det["class_name"])
+                         det["class_id"], det["class_name"],
+                         config=self.config)
             nt.activate(self.frame_id)
             if "emb" in det:
                 nt.update_appearance(det["emb"])
             new_stracks.append(nt)
+
+        # ---- Stage 6: Track Resurrection Layer ------------------------------
+        self._attempt_resurrection(new_stracks)
 
         # ---- Rebuild state lists --------------------------------------------
         self.tracked_stracks = (
@@ -860,8 +1164,7 @@ class BYTETracker:
         # ---- Fix 1: Suppress Duplicate IDs (IoU-NMS on live tracks) ---------
         self._suppress_duplicate_tracks(iou_threshold=0.65)
 
-        # ---- Fix 2: Repair nascent ID switches before they become permanent --
-        self._repair_nascent_id_switches(nascent_window=5, max_recent_loss=3)
+
 
         # ---- Build output ---------------------------------------------------
         output: List[Dict] = []
@@ -966,137 +1269,263 @@ class BYTETracker:
                 if idx not in suppressed
             ]
 
-    # ---- Fix 2: Retroactively repair nascent ID switches --------------------
 
-    def _repair_nascent_id_switches(self,
-                                     nascent_window: int = 5,
-                                     max_recent_loss: int = 3) -> None:
+
+    # ---- Stage 5: Switch detection and logging --------------------------------
+
+    def _detect_switches(
+        self,
+        dets_high: List[Dict],
+        unmatched_high: List[int],
+        all_known: List[STrack],
+    ) -> None:
         """
-        Detect and repair ID switches that happen in the first few frames of a
-        new track (nascent_window) caused by brief 1-3 frame detection jitter.
+        Detect potential ID switches by looking for new tracks being created
+        near recently-lost tracks of the same class. Log detailed context for
+        every suspected switch.
 
-        A jitter-induced switch looks like:
-          frame N:   existing track T goes Lost (missed detection by 1 frame)
-          frame N+1: same vehicle re-detected, gets brand new ID N
-
-        We catch this by scanning every newly-born track N against recently-lost
-        tracks T and checking three criteria simultaneously:
-          1. Same class_id
-          2. Spatial proximity:  dist(centers) <= 2.0 * max(N.w, N.h)
-          3. Appearance:         d_app(N.emb, T.emb) < 0.30
-          4. T has been lost for at most max_recent_loss frames
-
-        When a match is found, we transfer T's identity into N:
-          - N inherits T's track_id, class_history, class_name_map,
-            tracklet_len, last_reactivated_frame, and appearance embedding.
-          - T is evicted from lost_stracks immediately.
-          - The global _id_counter is NOT decremented (the ghost ID is simply
-            abandoned — IDs are cheap, correctness is not).
+        This is a DIAGNOSTIC tool — it does not alter tracking behavior.
+        It provides the empirical evidence needed to decide whether to invest
+        in ReID retraining or tracklet stitching.
         """
-        if not self.lost_stracks:
+        for d_idx in unmatched_high:
+            det = dets_high[d_idx]
+            det_bbox = det["bbox"]
+            det_cx = (det_bbox[0] + det_bbox[2]) / 2.0
+            det_cy = (det_bbox[1] + det_bbox[3]) / 2.0
+            det_cls = det["class_id"]
+            det_w = det_bbox[2] - det_bbox[0]
+            det_h = det_bbox[3] - det_bbox[1]
+            det_sz = max(det_w, det_h)
+
+            # Check if this new detection is suspiciously close to a recently-lost track
+            for lost_t in self.lost_stracks:
+                if lost_t.class_id != det_cls:
+                    continue
+                if lost_t.lost_frames > 10:
+                    continue
+
+                d_spatial = np.hypot(det_cx - lost_t.last_valid_cx,
+                                     det_cy - lost_t.last_valid_cy)
+
+                if d_spatial > 3.0 * det_sz:
+                    continue
+
+                # This looks like a potential ID switch
+                d_app = -1.0
+                if "emb" in det and lost_t.curr_emb is not None:
+                    d_app = compute_appearance_distance(det["emb"], lost_t.curr_emb)
+
+                # Compute IoU with the lost track's last bbox
+                lost_bbox = lost_t.bbox_xyxy
+                iou_val = float(iou_matrix(
+                    np.array([det_bbox], dtype=np.float32),
+                    np.array([lost_bbox], dtype=np.float32),
+                )[0, 0])
+
+                # Trajectory distance
+                if lost_t.avg_velocity != (0.0, 0.0):
+                    pred_cx = lost_t.last_valid_cx + lost_t.avg_velocity[0] * lost_t.lost_frames
+                    pred_cy = lost_t.last_valid_cy + lost_t.avg_velocity[1] * lost_t.lost_frames
+                    d_traj = np.hypot(det_cx - pred_cx, det_cy - pred_cy)
+                else:
+                    d_traj = d_spatial
+
+                switch_event = {
+                    "frame": self.frame_id,
+                    "old_id": lost_t.track_id,
+                    "new_id": -1,  # will be assigned when new track is created
+                    "class": lost_t.class_name,
+                    "class_id": det_cls,
+                    "lost_frames": lost_t.lost_frames,
+                    "spatial_distance": round(float(d_spatial), 2),
+                    "trajectory_distance": round(float(d_traj), 2),
+                    "appearance_distance": round(float(d_app), 4) if d_app >= 0 else "unavailable",
+                    "iou_with_lost": round(float(iou_val), 4),
+                    "lost_track_reliability": round(lost_t.reliability_score, 4),
+                    "lost_track_age": lost_t.tracklet_len,
+                    "lost_track_memory_score": round(lost_t.get_memory_score(), 4),
+                    "detection_confidence": round(det["confidence"], 4),
+                    "recovery_context": "unmatched_high_near_lost",
+                }
+                self._switch_log.append(switch_event)
+                logger.debug(
+                    "SwitchLog: Potential switch — old_id=%d cls=%s d_spatial=%.1f "
+                    "d_app=%.3f iou=%.3f lost=%d frame=%d",
+                    lost_t.track_id, lost_t.class_name, d_spatial,
+                    d_app, iou_val, lost_t.lost_frames, self.frame_id,
+                )
+                break  # Log only the best candidate per detection
+
+    def flush_switch_log(self) -> None:
+        """Write the accumulated switch log to disk as JSON."""
+        if not self._switch_log:
+            logger.info("Switch log is empty — no potential ID switches detected.")
             return
 
-        repairs: List[Tuple[STrack, STrack]] = []  # (nascent, lost_donor)
-        claimed_lost_ids: set = set()  # prevent one lost track fixing two nascents
+        out_path = Path(self._switch_log_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        for nascent in self.tracked_stracks:
-            # Only consider tracks fresh enough to have been a switch
-            if nascent.tracklet_len > nascent_window:
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "total_switch_events": len(self._switch_log),
+                "events": self._switch_log,
+            }, f, indent=2)
+
+        logger.info(
+            "Switch log written: %d events → %s",
+            len(self._switch_log), out_path,
+        )
+
+    def _attempt_resurrection(self, new_stracks: List[STrack]) -> None:
+        """
+        Stage 6: Track Resurrection Layer
+        A surgical identity recovery mechanism that resurrects lost tracks using appearance,
+        trajectory, heading, and memory decay scores, preventing ID fragmentation.
+        """
+        if not getattr(self, "resurrection_enabled", False):
+            return
+
+        resurrected_ids = set()
+
+        for nt in new_stracks:
+            if getattr(nt, "curr_emb", None) is None:
                 continue
 
-            n_bbox = nascent.bbox_xyxy
-            n_cx = (n_bbox[0] + n_bbox[2]) / 2.0
-            n_cy = (n_bbox[1] + n_bbox[3]) / 2.0
-            n_w  = n_bbox[2] - n_bbox[0]
-            n_h  = n_bbox[3] - n_bbox[1]
-            spatial_gate = 2.0 * max(n_w, n_h)
+            best_score = -1.0
+            best_candidate = None
+            best_log_entry = None
 
-            best_donor: Optional[STrack] = None
-            best_score: float = -1.0
-
-            for lost in self.lost_stracks:
-                # Criterion 1: class must match exactly
-                if lost.class_id != nascent.class_id:
+            for lt in self.lost_stracks:
+                if lt.track_id in resurrected_ids:
                     continue
 
-                # Criterion 2: must have gone lost very recently
-                if lost.lost_frames > max_recent_loss:
+                gap = self.frame_id - lt.frame_id
+                if gap < 2 or gap > self.resurrection_max_gap:
                     continue
 
-                # Criterion 3: cannot already be claimed by another nascent
-                if lost.track_id in claimed_lost_ids:
+                # Appearance Score
+                if lt.curr_emb is None:
+                    continue
+                d_app = compute_appearance_distance(nt.curr_emb, lt.curr_emb)
+                app_score = 1.0 - d_app
+
+                # Motorcycle Safeguard
+                if lt.class_id == 3 and app_score <= self.resurrection_motorcycle_app:
                     continue
 
-                # Criterion 4: spatial proximity using last_valid observation
-                d_spatial = np.hypot(
-                    n_cx - lost.last_valid_cx,
-                    n_cy - lost.last_valid_cy,
-                )
-                if d_spatial > spatial_gate:
-                    continue
-
-                # Criterion 5: appearance similarity (if both have embeddings)
-                if nascent.curr_emb is not None and lost.curr_emb is not None:
-                    d_app = compute_appearance_distance(nascent.curr_emb, lost.curr_emb)
-                    if d_app >= 0.30:
-                        continue
-                    # Composite repair score: blend spatial closeness + visual similarity
-                    repair_score = (
-                        0.5 * (1.0 - d_app) +
-                        0.5 * (1.0 - d_spatial / spatial_gate)
-                    )
+                # Trajectory Score
+                if lt.avg_velocity != (0.0, 0.0):
+                    pred_cx = lt.last_valid_cx + lt.avg_velocity[0] * gap
+                    pred_cy = lt.last_valid_cy + lt.avg_velocity[1] * gap
                 else:
-                    # Spatial-only score when embeddings unavailable
-                    repair_score = 1.0 - d_spatial / spatial_gate
+                    pred_cx = lt.last_valid_cx
+                    pred_cy = lt.last_valid_cy
 
-                if repair_score > best_score:
-                    best_score = repair_score
-                    best_donor = lost
+                nt_cx = (nt.bbox_xyxy[0] + nt.bbox_xyxy[2]) / 2.0
+                nt_cy = (nt.bbox_xyxy[1] + nt.bbox_xyxy[3]) / 2.0
 
-            if best_donor is not None:
-                repairs.append((nascent, best_donor))
-                claimed_lost_ids.add(best_donor.track_id)
+                d_spatial = math.hypot(nt_cx - pred_cx, nt_cy - pred_cy)
+                sz = max(nt.bbox_xyxy[2] - nt.bbox_xyxy[0], nt.bbox_xyxy[3] - nt.bbox_xyxy[1])
+                max_dist = max(3.0 * sz, 1.5 * sz * math.sqrt(gap))
+                if d_spatial > max_dist:
+                    continue
+                traj_score = max(0.0, 1.0 - (d_spatial / max_dist))
 
-        # Apply repairs: transfer identity from lost donor → nascent track
-        lost_ids_to_evict: set = set()
-        for nascent, donor in repairs:
-            logger.info(
-                "IDRepair: Replaced nascent ID %d (len=%d) with recovered ID %d"
-                " (cls=%s, donor_lost_frames=%d, frame=%d).",
-                nascent.track_id, nascent.tracklet_len, donor.track_id,
-                donor.class_name, donor.lost_frames, self.frame_id,
-            )
-            # Transfer identity — the nascent track keeps its Kalman state
-            # (it has the fresh, accurate observation) but gets the historical
-            # identity of the donor so the output ID is consistent.
-            nascent.track_id          = donor.track_id
-            nascent.class_history     = {**donor.class_history}   # deep copy
-            nascent.class_name_map    = {**donor.class_name_map}  # deep copy
-            nascent.tracklet_len      = donor.tracklet_len + nascent.tracklet_len
-            nascent.start_frame       = donor.start_frame
-            nascent.last_reactivated_frame = donor.last_reactivated_frame
-            nascent.last_valid_cx     = donor.last_valid_cx
-            nascent.last_valid_cy     = donor.last_valid_cy
+                # Heading Score
+                # cos(delta_heading) using bridge vector since nt is too new to have heading history
+                dx = nt_cx - lt.last_valid_cx
+                dy = nt_cy - lt.last_valid_cy
+                if abs(dx) < 0.5 and abs(dy) < 0.5:
+                    hdg_score = 1.0
+                else:
+                    heading_bridge = math.atan2(dy, dx)
+                    heading_old = getattr(lt, "avg_heading", 0.0)
+                    delta_heading = heading_old - heading_bridge
+                    hdg_score = max(0.0, math.cos(delta_heading))
 
-            # Merge appearance: keep the donor's long-term EMA, nudge with nascent's fresh emb
-            if donor.curr_emb is not None:
-                nascent.curr_emb = {
-                    "cnn":   donor.curr_emb["cnn"].copy(),
-                    "color": donor.curr_emb["color"].copy(),
+                # Require cos > 0.8 safeguard
+                if hdg_score < 0.8:
+                    continue
+
+                # Memory Score
+                mem_score = lt.get_memory_score()
+
+                # Final Score
+                w = self.resurrection_weights
+                final_score = (
+                    w.get("appearance", 0.45) * app_score +
+                    w.get("trajectory", 0.30) * traj_score +
+                    w.get("heading", 0.15) * hdg_score +
+                    w.get("memory", 0.10) * mem_score
+                )
+
+                log_entry = {
+                    "old_track_id": int(lt.track_id),
+                    "candidate_track_id": int(nt.track_id),
+                    "class": lt.class_name,
+                    "gap": int(gap),
+                    "appearance_score": float(round(app_score, 4)),
+                    "trajectory_score": float(round(traj_score, 4)),
+                    "heading_score": float(round(hdg_score, 4)),
+                    "memory_score": float(round(mem_score, 4)),
+                    "final_score": float(round(final_score, 4)),
+                    "decision": "rejected"
                 }
-                # Now apply nascent's fresh observation into the merged embedding
-                if nascent.curr_emb is not None:
-                    nascent.update_appearance(nascent.curr_emb, alpha=0.85)
 
-            # Re-resolve class via majority vote after merge
-            nascent.class_id   = max(nascent.class_history.items(), key=lambda x: x[1])[0]
-            nascent.class_name = nascent.class_name_map.get(nascent.class_id, nascent.class_name)
+                if final_score > best_score:
+                    best_score = final_score
+                    best_candidate = lt
+                    best_log_entry = log_entry
 
-            lost_ids_to_evict.add(donor.track_id)
+            if best_candidate is not None and best_log_entry is not None:
+                if best_score > self.resurrection_score_threshold:
+                    best_log_entry["decision"] = "resurrected"
+                    
+                    if getattr(self, "resurrection_logging_enabled", False):
+                        self._resurrection_log.append(best_log_entry)
+                        
+                    # Transfer ID and Lineage
+                    nt.resurrection_parent = best_candidate.track_id
+                    nt.track_id = best_candidate.track_id
+                    nt.class_history = getattr(best_candidate, "class_history", {}).copy()
+                    
+                    # Transfer Memory
+                    nt.trajectory_buffer = getattr(best_candidate, "trajectory_buffer", deque()).copy()
+                    nt.velocity_buffer = getattr(best_candidate, "velocity_buffer", deque()).copy()
+                    nt.heading_buffer = getattr(best_candidate, "heading_buffer", deque()).copy()
+                    
+                    # Ensure old track gets removed from memory correctly
+                    best_candidate.state = TrackState.Removed
+                    resurrected_ids.add(best_candidate.track_id)
+                    
+                    logger.info("RESURRECTION: Re-assigned New Track %d to Lost Track %d (Score: %.3f)", 
+                                nt.original_id, nt.track_id, best_score)
+                                
+                elif best_score > self.resurrection_log_threshold:
+                    if getattr(self, "resurrection_logging_enabled", False):
+                        self._resurrection_log.append(best_log_entry)
 
-        # Evict all donors from lost_stracks in one pass
-        if lost_ids_to_evict:
-            self.lost_stracks = [
-                t for t in self.lost_stracks
-                if t.track_id not in lost_ids_to_evict
-            ]
+    def flush_resurrection_log(self) -> None:
+        """Write the accumulated resurrection log to disk as JSON."""
+        if not getattr(self, "resurrection_logging_enabled", False) or not hasattr(self, "_resurrection_log"):
+            return
+            
+        if not self._resurrection_log:
+            logger.info("Resurrection log is empty.")
+            return
+
+        out_path = Path(self.resurrection_log_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "total_resurrection_attempts": len(self._resurrection_log),
+                "events": self._resurrection_log,
+            }, f, indent=2)
+
+        logger.info(
+            "Resurrection log written: %d events -> %s",
+            len(self._resurrection_log), out_path,
+        )
+

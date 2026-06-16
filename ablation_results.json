@@ -1,0 +1,30 @@
+{
+  "Stage 1-5 only": {
+    "Unique Tracks": 0,
+    "Fragmentation Gaps": 0,
+    "Suspicious Tracks": 26,
+    "Appearance Anomalies": 0,
+    "Teleportation Anomalies": 1
+  },
+  "Stage 1-5 + IDRepair": {
+    "Unique Tracks": 0,
+    "Fragmentation Gaps": 0,
+    "Suspicious Tracks": 26,
+    "Appearance Anomalies": 0,
+    "Teleportation Anomalies": 2
+  },
+  "Stage 1-5 + Resurrection": {
+    "Unique Tracks": 0,
+    "Fragmentation Gaps": 0,
+    "Suspicious Tracks": 22,
+    "Appearance Anomalies": 0,
+    "Teleportation Anomalies": 1
+  },
+  "Stage 1-5 + IDRepair + Resurrection": {
+    "Unique Tracks": 0,
+    "Fragmentation Gaps": 0,
+    "Suspicious Tracks": 24,
+    "Appearance Anomalies": 0,
+    "Teleportation Anomalies": 2
+  }
+}
