@@ -43,7 +43,7 @@ from tqdm import tqdm
 from detection import Detector
 from export import Exporter
 from homography import CoordinateMapper
-from smoothing import MovingAverageSmoother
+from smoothing import AdaptiveEMASmoother
 from tracker import BYTETracker, STrack
 from utils import ensure_dir, format_stats, setup_logging
 
@@ -183,8 +183,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---- Smoothing ----------------------------------------------------------
     smo = p.add_argument_group("Smoothing")
-    smo.add_argument("--smooth-window", type=int, default=7,
-                     help="Moving-average window size (frames). Use 1 to disable.")
+    smo.add_argument("--smooth-alpha", type=float, default=0.6,
+                     help="EMA smoothing factor (0.0–1.0). Higher → less smoothing, lower lag. "
+                          "Use 1.0 to disable smoothing.")
 
     # ---- Coordinate mapping -------------------------------------------------
     cmap = p.add_argument_group("Pixel-to-Metre Mapping")
@@ -336,7 +337,7 @@ def run(args: argparse.Namespace) -> dict:
         device       = args.device,
     )
 
-    smoother = MovingAverageSmoother(window=args.smooth_window)
+    smoother = AdaptiveEMASmoother(alpha=args.smooth_alpha)
 
     if args.scale_factor:
         mapper = CoordinateMapper.from_scale_factor(args.scale_factor)

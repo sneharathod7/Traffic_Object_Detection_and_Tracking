@@ -24,9 +24,18 @@ Smoothing replaces each coordinate with a local temporal average, substantially
 reducing high-frequency noise while preserving the genuine low-frequency motion
 of vehicles and pedestrians.
 
-TWO IMPLEMENTATIONS
-====================
-MovingAverageSmoother (default)
+THREE IMPLEMENTATIONS
+=====================
+AdaptiveEMASmoother (recommended — default)
+  Exponential Moving Average with adaptive alpha.  The most recent observation
+  gets ~60% weight (alpha=0.6), suppressing jitter with near-zero lag.
+  When a large position jump is detected (e.g. after track re-activation),
+  alpha temporarily spikes to ~0.9 so the estimate snaps to the new observation
+  instead of slowly drifting toward it.
+  Pro: near-zero lag, preserves sudden manoeuvres, O(1) per update.
+  Con: single alpha parameter to tune (0.5–0.8 range).
+
+MovingAverageSmoother (legacy)
   Simple O(1) online update using a fixed-length ring buffer (deque) per track.
   Window size 5–9 frames is sufficient for 25–30 fps video.
   Pro: zero parameters to tune, extremely fast.
@@ -49,9 +58,135 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Adaptive EMA smoother (recommended default)
+# ---------------------------------------------------------------------------
+
+class AdaptiveEMASmoother:
+    """
+    Per-track Exponential Moving Average smoother with adaptive alpha.
+
+    The EMA gives the most recent observation a weight of *alpha* and the
+    accumulated history a weight of *(1 − alpha)*.  This provides near-zero
+    lag compared to a simple moving average, while still suppressing
+    high-frequency jitter from detection instability.
+
+    **Adaptive alpha boost:**  When a new observation is far from the current
+    smoothed estimate (e.g. after track re-activation or a large occlusion
+    gap), the effective alpha is temporarily increased toward ``alpha_boost``
+    so the estimate snaps to the new position instead of slowly averaging
+    toward it.  The "jump threshold" is expressed as a multiple of the
+    track's typical per-frame displacement, estimated as an EMA of recent
+    frame-to-frame deltas.
+
+    Args:
+        alpha:           Base smoothing factor (0.0–1.0).  Higher → less
+                         smoothing, lower lag.  0.6 is optimal for 25 fps.
+        alpha_boost:     Alpha used when a position jump is detected.
+        jump_multiplier: A displacement larger than ``jump_multiplier *
+                         running_delta`` triggers the alpha boost.
+        max_age:         Frames without update before purging track state.
+    """
+
+    def __init__(
+        self,
+        alpha: float = 0.6,
+        alpha_boost: float = 0.9,
+        jump_multiplier: float = 3.0,
+        max_age: int = 120,
+    ) -> None:
+        self.alpha = alpha
+        self.alpha_boost = alpha_boost
+        self.jump_multiplier = jump_multiplier
+        self.max_age = max_age
+
+        # Per-track smoothed position:  {track_id: (s_cx, s_cy)}
+        self._state: Dict[int, Tuple[float, float]] = {}
+        # Per-track running EMA of frame-to-frame displacement magnitude
+        self._running_delta: Dict[int, float] = {}
+        # Bookkeeping for stale-track pruning
+        self._last_seen: Dict[int, int] = {}
+        self._global_frame: int = 0
+
+    def update(
+        self,
+        track_id: int,
+        cx: float,
+        cy: float,
+    ) -> Tuple[float, float]:
+        """
+        Push a new (cx, cy) observation and return the smoothed estimate.
+
+        Args:
+            track_id: Unique track identifier.
+            cx, cy:   Raw centre coordinates from the tracker.
+
+        Returns:
+            Smoothed (cx, cy).
+        """
+        self._last_seen[track_id] = self._global_frame
+
+        if track_id not in self._state:
+            # First observation — initialise without smoothing
+            self._state[track_id] = (cx, cy)
+            self._running_delta[track_id] = 0.0
+            return cx, cy
+
+        prev_cx, prev_cy = self._state[track_id]
+
+        # Frame-to-frame displacement
+        displacement = np.hypot(cx - prev_cx, cy - prev_cy)
+
+        # Update running delta estimate (EMA of displacements, α=0.3)
+        rd = self._running_delta[track_id]
+        rd = 0.3 * displacement + 0.7 * rd
+        self._running_delta[track_id] = rd
+
+        # Decide effective alpha: boost if this is a large jump
+        # A "large jump" means the displacement exceeds jump_multiplier × the
+        # track's typical per-frame movement.  The threshold has a floor of
+        # 5.0 px to avoid boosting on normally-moving objects whose running
+        # delta happens to be very small.
+        threshold = max(5.0, self.jump_multiplier * rd)
+        if displacement > threshold:
+            effective_alpha = self.alpha_boost
+        else:
+            effective_alpha = self.alpha
+
+        # EMA update
+        s_cx = effective_alpha * cx + (1.0 - effective_alpha) * prev_cx
+        s_cy = effective_alpha * cy + (1.0 - effective_alpha) * prev_cy
+        self._state[track_id] = (s_cx, s_cy)
+
+        return s_cx, s_cy
+
+    def tick(self) -> None:
+        """
+        Advance the internal frame counter and prune stale track buffers.
+        Call once per video frame.
+        """
+        self._global_frame += 1
+        stale = [
+            tid for tid, last in self._last_seen.items()
+            if (self._global_frame - last) > self.max_age
+        ]
+        for tid in stale:
+            del self._state[tid]
+            del self._running_delta[tid]
+            del self._last_seen[tid]
+        if stale:
+            logger.debug("Pruned %d stale EMA smoother buffers.", len(stale))
+
+    def reset(self) -> None:
+        """Clear all state (e.g. between video clips)."""
+        self._state.clear()
+        self._running_delta.clear()
+        self._last_seen.clear()
+        self._global_frame = 0
+
 
 # ---------------------------------------------------------------------------
-# Moving-average smoother (recommended default)
+# Moving-average smoother (legacy)
 # ---------------------------------------------------------------------------
 
 class MovingAverageSmoother:

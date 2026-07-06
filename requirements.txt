@@ -20,5 +20,8 @@ pandas>=2.0.0               # Optional: post-processing / analysis of output CSV
 sahi>=0.14.0                # DINO/ultralytics adapter + improved tile fusion
 supervision>=0.20.0
 
+# Vehicle Re-Identification
+torchreid>=0.2.5            # OSNet-x0.25 for vehicle-specific appearance embeddings
+
 # ONNX (optional — for DINO model export/optimisation)
 onnx>=1.14.0                # ONNX graph optimisation for deployment
