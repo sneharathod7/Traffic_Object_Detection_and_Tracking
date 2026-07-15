@@ -43,7 +43,7 @@ from tqdm import tqdm
 from detection import Detector
 from export import Exporter
 from homography import CoordinateMapper
-from smoothing import AdaptiveEMASmoother
+from smoothing import AdaptiveSplineSmoother, KalmanSmoother, MovingAverageSmoother
 from tracker import BYTETracker, STrack
 from utils import ensure_dir, format_stats, setup_logging
 
@@ -183,9 +183,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---- Smoothing ----------------------------------------------------------
     smo = p.add_argument_group("Smoothing")
-    smo.add_argument("--smooth-alpha", type=float, default=0.6,
-                     help="EMA smoothing factor (0.0–1.0). Higher → less smoothing, lower lag. "
-                          "Use 1.0 to disable smoothing.")
+    smo.add_argument(
+        "--smoother",
+        choices=["adaptive_spline", "moving_avg", "kalman"],
+        default="adaptive_spline",
+        help=(
+            "Trajectory smoother to use. "
+            "'adaptive_spline' (default): crowd-aware EMA + retrospective cubic spline — "
+            "best for dense/crowded scenes. "
+            "'moving_avg': simple fixed-window average (fast, slight lag). "
+            "'kalman': 1-D constant-velocity Kalman filter per track."
+        ),
+    )
+    smo.add_argument("--smooth-window", type=int, default=7,
+                     help="Moving-average window size (frames, only for moving_avg smoother).")
+    smo.add_argument("--ema-alpha", type=float, default=0.35,
+                     help="Base EMA responsiveness for adaptive_spline [0.1–0.9]. "
+                          "Lower = more smoothing; higher = more responsive.")
+    smo.add_argument("--spline-buffer", type=int, default=60,
+                     help="Retrospective history length (frames) for the spline smoother.")
+    smo.add_argument("--crowd-radius", type=float, default=150.0,
+                     help="Pixel radius used to count nearby tracks for density estimation "
+                          "in the adaptive_spline smoother.")
 
     # ---- Coordinate mapping -------------------------------------------------
     cmap = p.add_argument_group("Pixel-to-Metre Mapping")
@@ -337,7 +356,23 @@ def run(args: argparse.Namespace) -> dict:
         device       = args.device,
     )
 
-    smoother = AdaptiveEMASmoother(alpha=args.smooth_alpha)
+    if args.smoother == "adaptive_spline":
+        smoother = AdaptiveSplineSmoother(
+            ema_alpha    = args.ema_alpha,
+            crowd_radius = args.crowd_radius,
+            history_len  = args.spline_buffer,
+        )
+        logger.info(
+            "Smoother: AdaptiveSplineSmoother — ema_alpha=%.2f  crowd_radius=%.0f  "
+            "history_len=%d",
+            args.ema_alpha, args.crowd_radius, args.spline_buffer,
+        )
+    elif args.smoother == "kalman":
+        smoother = KalmanSmoother()
+        logger.info("Smoother: KalmanSmoother")
+    else:
+        smoother = MovingAverageSmoother(window=args.smooth_window)
+        logger.info("Smoother: MovingAverageSmoother — window=%d", args.smooth_window)
 
     if args.scale_factor:
         mapper = CoordinateMapper.from_scale_factor(args.scale_factor)
@@ -422,9 +457,14 @@ def run(args: argparse.Namespace) -> dict:
                 # 3. Smooth + map coordinates
                 enriched = []
                 smoother.tick()
+                # Build crowd-context list for the adaptive spline smoother.
+                all_centers = [(t["center"][0], t["center"][1]) for t in tracks]
                 for t in tracks:
                     cx, cy = t["center"]
-                    s_cx, s_cy = smoother.update(t["track_id"], cx, cy)
+                    s_cx, s_cy = smoother.update(
+                        t["track_id"], cx, cy,
+                        all_track_centers=all_centers,
+                    )
                     wx, wy = mapper.to_world(s_cx, s_cy)
 
                     total_track_ids.add(t["track_id"])

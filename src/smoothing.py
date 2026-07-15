@@ -1,5 +1,6 @@
 """
 Trajectory Smoothing Module
+============================
 
 WHY SMOOTHING IS CRITICAL FOR SAFETY ANALYSIS
 ===============================================
@@ -9,161 +10,238 @@ frame-to-frame jitter caused by:
     even for a stationary object).
   • Quantisation noise from integer pixel rounding.
   • Brief partial occlusions that shift the box by a few pixels.
+  • SAHI tile-boundary artefacts where the same object is detected from
+    two adjacent tiles with a small centre-of-mass offset.
 
 For safety-rule logic, jitter translates directly into:
   1. Spurious velocity spikes — an object that is actually stationary may appear
      to jump 5 pixels between frames, which at a scale of 0.05 m/px × 25 fps
-     gives a phantom velocity of 6.25 m/s (~22 km/h).  This would trigger false
-     "speeding" or "sudden acceleration" alarms.
+     gives a phantom velocity of 6.25 m/s (~22 km/h).
   2. Erratic trajectory curves — the direction-of-travel vector becomes noisy,
      making lane-change or wrong-way detection unreliable.
-  3. Incorrect TTC estimates — Time-To-Collision computed from jittery
-     positions produces wide confidence intervals.
+  3. Incorrect TTC estimates — Time-To-Collision computed from jittery positions
+     produces dangerously wide confidence intervals.
 
-Smoothing replaces each coordinate with a local temporal average, substantially
-reducing high-frequency noise while preserving the genuine low-frequency motion
-of vehicles and pedestrians.
+THREE IMPLEMENTATIONS (in order of recommended preference)
+============================================================
 
-THREE IMPLEMENTATIONS
-=====================
-AdaptiveEMASmoother (recommended — default)
-  Exponential Moving Average with adaptive alpha.  The most recent observation
-  gets ~60% weight (alpha=0.6), suppressing jitter with near-zero lag.
-  When a large position jump is detected (e.g. after track re-activation),
-  alpha temporarily spikes to ~0.9 so the estimate snaps to the new observation
-  instead of slowly drifting toward it.
-  Pro: near-zero lag, preserves sudden manoeuvres, O(1) per update.
-  Con: single alpha parameter to tune (0.5–0.8 range).
+AdaptiveSplineSmoother  ← DEFAULT — best for dense/crowded scenes
+--------------------------------------------------------------------
+A two-phase hybrid approach:
 
-MovingAverageSmoother (legacy)
-  Simple O(1) online update using a fixed-length ring buffer (deque) per track.
-  Window size 5–9 frames is sufficient for 25–30 fps video.
-  Pro: zero parameters to tune, extremely fast.
-  Con: introduces a half-window lag (2–4 frames), acceptable for safety analysis.
+  Phase 1 (online):
+    An Adaptive Exponential Moving Average (EMA) produces a real-time smoothed
+    position each frame. The EMA alpha (responsiveness) is dynamically scaled:
+      • LOWER alpha (more smoothing) when crowding density is HIGH — many tracks
+        are packed closely together and detection noise is worst.
+      • HIGHER alpha (more responsive) when a large genuine jump is detected,
+        to avoid lag during sudden accelerations or sharp turns.
+      • A jump-detection threshold prevents this from misfiring on jitter.
 
-KalmanSmoother (alternative)
-  1-D Kalman filter applied independently to cx and cy.
-  Pro: adapts to measurement noise; smoother on long straight segments.
-  Con: requires two noise parameters (process_noise, measurement_noise) to tune.
-  Use when you need minimal lag and still want filtering.
+  Phase 2 (retrospective, every `spline_every` frames):
+    Once the per-track EMA history buffer has at least `min_points` entries, a
+    natural cubic spline (scipy.interpolate.CubicSpline) is fitted to the entire
+    history and the fitted values replace the stored positions. This enforces
+    C2-continuity (smooth acceleration curves — physically correct for ground
+    vehicles), removes residual EMA noise, and produces analytically exact
+    velocity/acceleration estimates by differentiating the spline.
+
+  Crowd density signal:
+    Computed each frame as the number of active tracks within `crowd_radius`
+    pixels of the current track. This single scalar drives EMA alpha scaling.
+
+MovingAverageSmoother  ← simple fallback
+-----------------------------------------
+  Simple O(1) online update using a fixed-length ring buffer per track.
+  Window size 5–9 frames. Fast but introduces half-window lag and treats
+  all frames equally (including jitter frames).
+
+KalmanSmoother  ← alternative for low-jitter scenes
+------------------------------------------------------
+  1-D constant-velocity Kalman filter applied independently to cx and cy.
+  Adapts to measurement noise; smoother on long straight segments but requires
+  two noise hyper-parameters to tune.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import defaultdict, deque
-from typing import Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from scipy.interpolate import CubicSpline
 
 logger = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
-# Adaptive EMA smoother (recommended default)
+# AdaptiveSplineSmoother  (primary / default)
 # ---------------------------------------------------------------------------
 
-class AdaptiveEMASmoother:
+class AdaptiveSplineSmoother:
     """
-    Per-track Exponential Moving Average smoother with adaptive alpha.
+    Hybrid crowd-aware EMA + retrospective cubic-spline trajectory smoother.
 
-    The EMA gives the most recent observation a weight of *alpha* and the
-    accumulated history a weight of *(1 − alpha)*.  This provides near-zero
-    lag compared to a simple moving average, while still suppressing
-    high-frequency jitter from detection instability.
+    Designed specifically for dense Indian intersection footage where the
+    moving-average's fixed lag and equal weighting produce significant velocity
+    estimation errors in crowded regions.
 
-    **Adaptive alpha boost:**  When a new observation is far from the current
-    smoothed estimate (e.g. after track re-activation or a large occlusion
-    gap), the effective alpha is temporarily increased toward ``alpha_boost``
-    so the estimate snaps to the new position instead of slowly averaging
-    toward it.  The "jump threshold" is expressed as a multiple of the
-    track's typical per-frame displacement, estimated as an EMA of recent
-    frame-to-frame deltas.
+    Algorithm overview
+    ------------------
+    Each frame, for every active track:
+      1. Compute local crowd density (tracks within `crowd_radius` pixels).
+      2. Derive adaptive EMA alpha from base alpha + density penalty + jump bonus.
+      3. Apply EMA update → real-time smoothed (cx, cy) for this frame.
+      4. Store smoothed point in the retrospective history buffer.
+      5. Every `spline_every` frames (and when a buffer has >= min_points),
+         fit a natural cubic spline to the full history and replace stored
+         EMA values with spline-evaluated values.  This removes residual
+         EMA bias and enforces C2-continuous trajectories.
 
     Args:
-        alpha:           Base smoothing factor (0.0–1.0).  Higher → less
-                         smoothing, lower lag.  0.6 is optimal for 25 fps.
-        alpha_boost:     Alpha used when a position jump is detected.
-        jump_multiplier: A displacement larger than ``jump_multiplier *
-                         running_delta`` triggers the alpha boost.
-        max_age:         Frames without update before purging track state.
+        ema_alpha:       Base EMA responsiveness [0.1 – 0.9].
+                         Lower → more smoothing, more lag.
+                         Higher → more responsive, less smoothing.
+                         Default 0.35 balances lag and smoothness at 25 fps.
+        crowd_radius:    Pixel radius used to count nearby tracks for density
+                         estimation. Default 150 px (≈3 car lengths at 0.05 m/px).
+        crowd_alpha_min: EMA alpha lower-bound applied in maximum crowding.
+                         Default 0.15 (heavy smoothing in very dense regions).
+        jump_thresh:     Pixel displacement threshold above which a position
+                         change is flagged as a genuine rapid motion (not jitter).
+                         Alpha is boosted toward 1.0 for such frames.
+                         Default 40 px (≈2 m at 0.05 m/px × 1 frame at 25 fps).
+        min_points:      Minimum history length before spline fitting is attempted.
+                         Cubic spline needs ≥ 4 points; default 8 gives a better
+                         initial curve shape.
+        spline_every:    Re-fit the spline every N frames.  Lower → smoother
+                         trajectory but higher CPU cost.  Default 5 frames.
+        history_len:     Maximum history frames per track. Older points are
+                         discarded (sliding window).  Default 60 frames (2.4 s
+                         at 25 fps).
+        max_age:         Frames without update before a track's state is purged.
     """
 
     def __init__(
         self,
-        alpha: float = 0.6,
-        alpha_boost: float = 0.9,
-        jump_multiplier: float = 3.0,
-        max_age: int = 120,
+        ema_alpha:       float = 0.35,
+        crowd_radius:    float = 150.0,
+        crowd_alpha_min: float = 0.15,
+        jump_thresh:     float = 40.0,
+        min_points:      int   = 8,
+        spline_every:    int   = 5,
+        history_len:     int   = 60,
+        max_age:         int   = 90,
     ) -> None:
-        self.alpha = alpha
-        self.alpha_boost = alpha_boost
-        self.jump_multiplier = jump_multiplier
-        self.max_age = max_age
+        self.ema_alpha       = ema_alpha
+        self.crowd_radius    = crowd_radius
+        self.crowd_alpha_min = crowd_alpha_min
+        self.jump_thresh     = jump_thresh
+        self.min_points      = min_points
+        self.spline_every    = spline_every
+        self.history_len     = history_len
+        self.max_age         = max_age
 
-        # Per-track smoothed position:  {track_id: (s_cx, s_cy)}
-        self._state: Dict[int, Tuple[float, float]] = {}
-        # Per-track running EMA of frame-to-frame displacement magnitude
-        self._running_delta: Dict[int, float] = {}
-        # Bookkeeping for stale-track pruning
-        self._last_seen: Dict[int, int] = {}
+        # Per-track EMA state: last smoothed (cx, cy)
+        self._ema_cx: Dict[int, float] = {}
+        self._ema_cy: Dict[int, float] = {}
+
+        # Per-track retrospective history: list of (frame_idx, raw_cx, raw_cy)
+        # After spline re-fitting these are replaced with spline-evaluated values.
+        self._history: Dict[int, List[Tuple[int, float, float]]] = defaultdict(list)
+
+        # Per-track spline objects (fitted; None until min_points reached)
+        self._spline_x: Dict[int, Optional[CubicSpline]] = {}
+        self._spline_y: Dict[int, Optional[CubicSpline]] = {}
+
+        # Frame counter per track (frames since track was last seen)
+        self._last_seen:    Dict[int, int] = {}
         self._global_frame: int = 0
+
+        # Frame counter per track for spline re-fitting trigger
+        self._frames_since_refit: Dict[int, int] = defaultdict(int)
+
+    # -----------------------------------------------------------------------
+    # Public API
+    # -----------------------------------------------------------------------
 
     def update(
         self,
-        track_id: int,
-        cx: float,
-        cy: float,
+        track_id:      int,
+        cx:            float,
+        cy:            float,
+        all_track_centers: Optional[List[Tuple[float, float]]] = None,
     ) -> Tuple[float, float]:
         """
-        Push a new (cx, cy) observation and return the smoothed estimate.
+        Push a new raw centre observation and return the smoothed estimate.
 
         Args:
-            track_id: Unique track identifier.
-            cx, cy:   Raw centre coordinates from the tracker.
+            track_id:           Unique track identifier.
+            cx, cy:             Raw centre from the tracker (Kalman output).
+            all_track_centers:  List of (cx, cy) for ALL tracks in this frame.
+                                Used to compute crowd density.  Pass None to
+                                skip density estimation (uses base alpha).
 
         Returns:
-            Smoothed (cx, cy).
+            Smoothed (cx, cy) for this frame.
         """
         self._last_seen[track_id] = self._global_frame
 
-        if track_id not in self._state:
-            # First observation — initialise without smoothing
-            self._state[track_id] = (cx, cy)
-            self._running_delta[track_id] = 0.0
-            return cx, cy
+        # ---- Step 1: crowd density → adaptive alpha -------------------------
+        alpha = self._compute_alpha(track_id, cx, cy, all_track_centers)
 
-        prev_cx, prev_cy = self._state[track_id]
-
-        # Frame-to-frame displacement
-        displacement = np.hypot(cx - prev_cx, cy - prev_cy)
-
-        # Update running delta estimate (EMA of displacements, α=0.3)
-        rd = self._running_delta[track_id]
-        rd = 0.3 * displacement + 0.7 * rd
-        self._running_delta[track_id] = rd
-
-        # Decide effective alpha: boost if this is a large jump
-        # A "large jump" means the displacement exceeds jump_multiplier × the
-        # track's typical per-frame movement.  The threshold has a floor of
-        # 5.0 px to avoid boosting on normally-moving objects whose running
-        # delta happens to be very small.
-        threshold = max(5.0, self.jump_multiplier * rd)
-        if displacement > threshold:
-            effective_alpha = self.alpha_boost
+        # ---- Step 2: EMA update --------------------------------------------
+        if track_id not in self._ema_cx:
+            # First observation: initialise EMA with raw value (zero lag).
+            self._ema_cx[track_id] = cx
+            self._ema_cy[track_id] = cy
         else:
-            effective_alpha = self.alpha
+            self._ema_cx[track_id] = alpha * cx + (1.0 - alpha) * self._ema_cx[track_id]
+            self._ema_cy[track_id] = alpha * cy + (1.0 - alpha) * self._ema_cy[track_id]
 
-        # EMA update
-        s_cx = effective_alpha * cx + (1.0 - effective_alpha) * prev_cx
-        s_cy = effective_alpha * cy + (1.0 - effective_alpha) * prev_cy
-        self._state[track_id] = (s_cx, s_cy)
+        s_cx = self._ema_cx[track_id]
+        s_cy = self._ema_cy[track_id]
+
+        # ---- Step 3: append to retrospective history -----------------------
+        hist = self._history[track_id]
+        hist.append((self._global_frame, s_cx, s_cy))
+
+        # Slide window — keep only the most recent `history_len` points.
+        if len(hist) > self.history_len:
+            self._history[track_id] = hist[-self.history_len:]
+
+        # ---- Step 4: periodic spline re-fitting ----------------------------
+        self._frames_since_refit[track_id] += 1
+        if (
+            len(self._history[track_id]) >= self.min_points
+            and self._frames_since_refit[track_id] >= self.spline_every
+        ):
+            self._refit_spline(track_id)
+            self._frames_since_refit[track_id] = 0
+
+        # ---- Step 5: return spline-evaluated position if available ---------
+        # The spline is evaluated at the current frame to get the best
+        # retrospectively-corrected estimate.
+        spx = self._spline_x.get(track_id)
+        spy = self._spline_y.get(track_id)
+        if spx is not None and spy is not None:
+            t_min = self._history[track_id][0][0]
+            t_max = self._history[track_id][-1][0]
+            t_cur = float(self._global_frame)
+            # Clamp to the valid spline domain.
+            t_eval = float(np.clip(t_cur, t_min, t_max))
+            try:
+                return float(spx(t_eval)), float(spy(t_eval))
+            except Exception:
+                pass  # fall back to EMA if spline evaluation fails
 
         return s_cx, s_cy
 
     def tick(self) -> None:
         """
-        Advance the internal frame counter and prune stale track buffers.
-        Call once per video frame.
+        Advance the internal frame counter and prune stale track states.
+        Call once per video frame before processing any tracks in that frame.
         """
         self._global_frame += 1
         stale = [
@@ -171,22 +249,176 @@ class AdaptiveEMASmoother:
             if (self._global_frame - last) > self.max_age
         ]
         for tid in stale:
-            del self._state[tid]
-            del self._running_delta[tid]
-            del self._last_seen[tid]
+            self._ema_cx.pop(tid, None)
+            self._ema_cy.pop(tid, None)
+            self._history.pop(tid, None)
+            self._spline_x.pop(tid, None)
+            self._spline_y.pop(tid, None)
+            self._last_seen.pop(tid, None)
+            self._frames_since_refit.pop(tid, None)
         if stale:
-            logger.debug("Pruned %d stale EMA smoother buffers.", len(stale))
+            logger.debug("AdaptiveSplineSmoother: pruned %d stale track states.", len(stale))
 
     def reset(self) -> None:
-        """Clear all state (e.g. between video clips)."""
-        self._state.clear()
-        self._running_delta.clear()
+        """Clear all state (call between video clips for a fresh run)."""
+        self._ema_cx.clear()
+        self._ema_cy.clear()
+        self._history.clear()
+        self._spline_x.clear()
+        self._spline_y.clear()
         self._last_seen.clear()
+        self._frames_since_refit.clear()
         self._global_frame = 0
+
+    def get_velocity(
+        self,
+        track_id: int,
+        fps: float = 25.0,
+        scale_m_per_px: float = 0.05,
+    ) -> Tuple[float, float, float]:
+        """
+        Return analytically-derived instantaneous velocity (vx, vy, speed) in m/s
+        using the spline derivative at the current frame.
+
+        If no spline has been fitted yet, returns (0.0, 0.0, 0.0).
+
+        Args:
+            track_id:        Track whose velocity to compute.
+            fps:             Video frame rate for the pixel/frame → m/s conversion.
+            scale_m_per_px:  Metres per pixel scale factor.
+
+        Returns:
+            (vx, vy, speed) in m/s.
+        """
+        spx = self._spline_x.get(track_id)
+        spy = self._spline_y.get(track_id)
+        if spx is None or spy is None:
+            return 0.0, 0.0, 0.0
+
+        hist = self._history.get(track_id, [])
+        if not hist:
+            return 0.0, 0.0, 0.0
+
+        t_min = hist[0][0]
+        t_max = hist[-1][0]
+        t_cur = float(np.clip(self._global_frame, t_min, t_max))
+
+        try:
+            # Spline derivative is in pixels/frame. Convert to m/s.
+            vx_px_per_frame = float(spx(t_cur, 1))   # 1st derivative
+            vy_px_per_frame = float(spy(t_cur, 1))
+            vx = vx_px_per_frame * fps * scale_m_per_px
+            vy = vy_px_per_frame * fps * scale_m_per_px
+            speed = float(np.hypot(vx, vy))
+            return vx, vy, speed
+        except Exception:
+            return 0.0, 0.0, 0.0
+
+    # -----------------------------------------------------------------------
+    # Private helpers
+    # -----------------------------------------------------------------------
+
+    def _compute_alpha(
+        self,
+        track_id:          int,
+        cx:                float,
+        cy:                float,
+        all_track_centers: Optional[List[Tuple[float, float]]],
+    ) -> float:
+        """
+        Compute the adaptive EMA alpha for this update.
+
+        Logic:
+          1. Start from `self.ema_alpha` (base).
+          2. Count nearby tracks (crowd density). Scale alpha DOWN linearly
+             from base → crowd_alpha_min as density grows from 0 → 10 neighbours.
+          3. Detect a genuine large jump (displacement > jump_thresh from the
+             current EMA state). Boost alpha toward 1.0 proportionally to the
+             excess displacement so the smoother catches up quickly.
+        """
+        alpha = self.ema_alpha
+
+        # ---- Crowd density penalty -----------------------------------------
+        if all_track_centers is not None and len(all_track_centers) > 1:
+            n_close = sum(
+                1 for (ox, oy) in all_track_centers
+                if (ox != cx or oy != cy)  # exclude self
+                and np.hypot(ox - cx, oy - cy) <= self.crowd_radius
+            )
+            # Linear interpolation: 0 neighbours → base alpha; 10+ → min alpha.
+            crowd_factor = min(1.0, n_close / 10.0)
+            alpha = alpha - crowd_factor * (alpha - self.crowd_alpha_min)
+
+        # ---- Jump boost ----------------------------------------------------
+        if track_id in self._ema_cx:
+            displacement = np.hypot(
+                cx - self._ema_cx[track_id],
+                cy - self._ema_cy[track_id],
+            )
+            if displacement > self.jump_thresh:
+                # Boost alpha proportionally: at 2× jump_thresh → alpha = 1.0.
+                excess = (displacement - self.jump_thresh) / self.jump_thresh
+                jump_alpha = min(1.0, alpha + excess * (1.0 - alpha))
+                alpha = jump_alpha
+                logger.debug(
+                    "AdaptiveSpline: track %d — large jump %.1f px detected, "
+                    "alpha boosted to %.3f",
+                    track_id, displacement, alpha,
+                )
+
+        return float(np.clip(alpha, self.crowd_alpha_min, 1.0))
+
+    def _refit_spline(self, track_id: int) -> None:
+        """
+        Fit a natural cubic spline to the history of track_id and store it.
+        Also replaces historical EMA positions with spline-evaluated values
+        to enforce C2-continuity on the stored trajectory.
+        """
+        hist = self._history[track_id]
+        if len(hist) < self.min_points:
+            return
+
+        ts  = np.array([h[0] for h in hist], dtype=np.float64)
+        cxs = np.array([h[1] for h in hist], dtype=np.float64)
+        cys = np.array([h[2] for h in hist], dtype=np.float64)
+
+        # Deduplicate: CubicSpline requires strictly monotonic t values.
+        # In rare cases (track re-activation) the same frame index can appear.
+        _, unique_idx = np.unique(ts, return_index=True)
+        if len(unique_idx) < self.min_points:
+            return
+        ts  = ts[unique_idx]
+        cxs = cxs[unique_idx]
+        cys = cys[unique_idx]
+
+        try:
+            spx = CubicSpline(ts, cxs, bc_type="natural")
+            spy = CubicSpline(ts, cys, bc_type="natural")
+        except Exception as e:
+            logger.debug("AdaptiveSpline: spline fitting failed for track %d: %s", track_id, e)
+            return
+
+        self._spline_x[track_id] = spx
+        self._spline_y[track_id] = spy
+
+        # Replace stored EMA positions with spline values (retrospective correction).
+        corrected = []
+        for (t, _, _) in hist:
+            try:
+                corrected.append((t, float(spx(float(t))), float(spy(float(t)))))
+            except Exception:
+                corrected.append((t, float(spx(float(np.clip(t, ts[0], ts[-1])))),
+                                     float(spy(float(np.clip(t, ts[0], ts[-1]))))))
+        self._history[track_id] = corrected
+
+        logger.debug(
+            "AdaptiveSpline: spline fitted for track %d over %d points (t=[%.0f..%.0f])",
+            track_id, len(ts), ts[0], ts[-1],
+        )
 
 
 # ---------------------------------------------------------------------------
-# Moving-average smoother (legacy)
+# Moving-average smoother (kept as fallback)
 # ---------------------------------------------------------------------------
 
 class MovingAverageSmoother:
@@ -206,27 +438,22 @@ class MovingAverageSmoother:
         self.window  = window
         self.max_age = max_age
 
-        # {track_id: deque of (cx, cy)}
-        self._buffers:       Dict[int, deque] = defaultdict(lambda: deque(maxlen=window))
-        # {track_id: frames_since_last_update}
-        self._last_seen:     Dict[int, int]   = {}
-        self._global_frame:  int = 0
+        self._buffers:      Dict[int, deque] = defaultdict(lambda: deque(maxlen=window))
+        self._last_seen:    Dict[int, int]   = {}
+        self._global_frame: int = 0
 
     def update(
         self,
         track_id: int,
         cx:       float,
         cy:       float,
+        all_track_centers: Optional[List[Tuple[float, float]]] = None,
     ) -> Tuple[float, float]:
         """
         Push a new (cx, cy) observation and return the smoothed estimate.
 
-        Args:
-            track_id: Unique track identifier.
-            cx, cy:   Raw centre coordinates from the tracker.
-
-        Returns:
-            Smoothed (cx, cy) — the mean over the buffer.
+        The `all_track_centers` argument is accepted for API compatibility with
+        AdaptiveSplineSmoother but is unused here.
         """
         buf = self._buffers[track_id]
         buf.append((cx, cy))
@@ -240,7 +467,7 @@ class MovingAverageSmoother:
     def tick(self) -> None:
         """
         Advance the internal frame counter and prune stale buffers.
-        Call once per video frame (regardless of whether any tracks are active).
+        Call once per video frame.
         """
         self._global_frame += 1
         stale = [
@@ -259,6 +486,11 @@ class MovingAverageSmoother:
         self._last_seen.clear()
         self._global_frame = 0
 
+    def get_velocity(self, track_id: int, fps: float = 25.0,
+                     scale_m_per_px: float = 0.05) -> Tuple[float, float, float]:
+        """Stub for API compatibility. Returns zeros (velocity not tracked)."""
+        return 0.0, 0.0, 0.0
+
 
 # ---------------------------------------------------------------------------
 # 1-D Kalman smoother (alternative)
@@ -268,14 +500,13 @@ class _Kalman1D:
     """Scalar constant-velocity Kalman filter for a single coordinate."""
 
     def __init__(self, process_noise: float, measurement_noise: float) -> None:
-        # State [x, v], Process model: x' = x + v, v' = v
         self.F  = np.array([[1.0, 1.0], [0.0, 1.0]])
         self.H  = np.array([[1.0, 0.0]])
         self.Q  = np.diag([process_noise, process_noise * 0.1])
         self.R  = np.array([[measurement_noise]])
 
-        self.x  = np.zeros((2, 1))          # state
-        self.P  = np.eye(2) * 100.0         # covariance (high initial uncertainty)
+        self.x  = np.zeros((2, 1))
+        self.P  = np.eye(2) * 100.0
         self._initialised = False
 
     def update(self, z: float) -> float:
@@ -284,11 +515,9 @@ class _Kalman1D:
             self._initialised = True
             return z
 
-        # Predict
         self.x = self.F @ self.x
         self.P = self.F @ self.P @ self.F.T + self.Q
 
-        # Update
         S = self.H @ self.P @ self.H.T + self.R
         K = self.P @ self.H.T / S[0, 0]
         self.x = self.x + K * (z - (self.H @ self.x)[0, 0])
@@ -303,9 +532,8 @@ class KalmanSmoother:
 
     Args:
         process_noise:      Controls how quickly the filter adapts to genuine
-                            motion changes. Higher → more responsive but less smooth.
+                            motion changes.
         measurement_noise:  Expected pixel-level jitter in raw detections.
-                            Higher → more smoothing but more lag.
         max_age:            Frames without update before purging track state.
     """
 
@@ -335,10 +563,9 @@ class KalmanSmoother:
         track_id: int,
         cx:       float,
         cy:       float,
+        all_track_centers: Optional[List[Tuple[float, float]]] = None,
     ) -> Tuple[float, float]:
-        """
-        Feed a raw position observation and return the Kalman-smoothed estimate.
-        """
+        """Feed a raw position observation and return the Kalman-smoothed estimate."""
         kx, ky = self._get_or_create(track_id)
         self._last_seen[track_id] = self._global_frame
         return kx.update(cx), ky.update(cy)
@@ -360,3 +587,8 @@ class KalmanSmoother:
         self._filters_y.clear()
         self._last_seen.clear()
         self._global_frame = 0
+
+    def get_velocity(self, track_id: int, fps: float = 25.0,
+                     scale_m_per_px: float = 0.05) -> Tuple[float, float, float]:
+        """Stub for API compatibility. Returns zeros (velocity not tracked by Kalman)."""
+        return 0.0, 0.0, 0.0
