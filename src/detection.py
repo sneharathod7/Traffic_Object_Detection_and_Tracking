@@ -93,8 +93,8 @@ class Detector:
         conf: float = 0.10,
         iou: float = 0.5,
         use_tiling: bool = True,
-        tile_grid: Tuple[int, int] = (2, 2),
-        tile_overlap: float = 0.2,
+        tile_grid: Tuple[int, int] = (6, 6),
+        tile_overlap: float = 0.6,
         use_tta: bool = False,
         device: Optional[str] = None,
     ) -> None:

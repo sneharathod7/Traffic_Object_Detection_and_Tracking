@@ -116,20 +116,20 @@ def build_parser() -> argparse.ArgumentParser:
     det.add_argument("--conf",   type=float, default=0.10, help="Detection confidence threshold.")
     det.add_argument("--iou",    type=float, default=0.50, help="NMS IoU threshold.")
     det.add_argument(
-        "--tile-grid", default="3x3",
+        "--tile-grid", default="6x6",
         help="Tiling grid as ROWSxCOLS (e.g. '2x2' or '3x3') for YOLOv8. Use '1x1' to disable tiling.",
     )
-    det.add_argument("--tile-overlap", type=float, default=0.20,
-                     help="Fractional overlap between adjacent tiles (0.0–0.4) for YOLOv8.")
+    det.add_argument("--tile-overlap", type=float, default=0.60,
+                     help="Fractional overlap between adjacent tiles (0.0–0.75) for YOLOv8.")
     det.add_argument("--tta", action="store_true",
                      help="Enable test-time augmentation for YOLOv8 (slower, more accurate).")
-    det.add_argument("--slice-height", type=int, default=512,
+    det.add_argument("--slice-height", type=int, default=256,
                      help="SAHI slice height.")
-    det.add_argument("--slice-width", type=int, default=512,
+    det.add_argument("--slice-width", type=int, default=256,
                      help="SAHI slice width.")
-    det.add_argument("--overlap-height-ratio", type=float, default=0.40,
+    det.add_argument("--overlap-height-ratio", type=float, default=0.75,
                      help="SAHI slice overlap height ratio.")
-    det.add_argument("--overlap-width-ratio", type=float, default=0.40,
+    det.add_argument("--overlap-width-ratio", type=float, default=0.75,
                      help="SAHI slice overlap width ratio.")
     det.add_argument("--device", default=None,
                      help="Inference device: 'cuda', 'cpu', 'mps', or '0' for GPU index.")

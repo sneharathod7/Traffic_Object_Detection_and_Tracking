@@ -48,7 +48,7 @@ def create_tiles(
     Args:
         frame:   BGR image as H×W×C numpy array.
         grid:    (rows, cols) — number of tiles along each axis.
-        overlap: Fractional padding added to each tile edge (0.0–0.4).
+        overlap: Fractional padding added to each tile edge (0.0–0.75).
 
     Returns:
         List of tile dicts, each containing:

@@ -173,15 +173,15 @@ class SahiDinoDetector:
     def __init__(
         self,
         model_path: str = "rtdetr-x.pt",
-        slice_height: int = 640,
-        slice_width: int = 640,
-        overlap_height_ratio: float = 0.30,
-        overlap_width_ratio: float = 0.30,
+        slice_height: int = 256,
+        slice_width: int = 256,
+        overlap_height_ratio: float = 0.75,
+        overlap_width_ratio: float = 0.75,
         conf: float = 0.10,
         device: Optional[str] = None,
         # WBF tuning parameters
-        wbf_cluster_distance: float = 30.0,
-        wbf_iou_thresh: float = 0.35,
+        wbf_cluster_distance: float = 45.0,
+        wbf_iou_thresh: float = 0.30,
     ) -> None:
         """
         Args:

@@ -60,10 +60,10 @@ class SahiRTDetrDetector:
     def __init__(
         self,
         model_path: str = "rtdetr-l.pt",
-        slice_height: int = 512,
-        slice_width: int = 512,
-        overlap_height_ratio: float = 0.30,
-        overlap_width_ratio: float = 0.30,
+        slice_height: int = 256,
+        slice_width: int = 256,
+        overlap_height_ratio: float = 0.75,
+        overlap_width_ratio: float = 0.75,
         conf: float = 0.10,
         device: Optional[str] = None,
     ) -> None:
