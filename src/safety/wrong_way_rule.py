@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-def detect_wrong_way_violations(csv_file):
+def detect_wrong_way_violations(csv_file, output_csv=None):
     # Load dataset
     try:
         df = pd.read_csv(csv_file)
@@ -89,7 +89,23 @@ def detect_wrong_way_violations(csv_file):
     for track_id, info in violations.items():
         print(f"Track ID {track_id} (Class: {info['class_name']}) - Violation started at frame: {info['start_frame']}")
 
+    if output_csv:
+        records = []
+        for track_id, info in violations.items():
+            records.append({
+                'track_id': track_id,
+                'class_name': info['class_name'],
+                'start_frame': info['start_frame'],
+                'violation_type': 'Wrong-Way'
+            })
+        pd.DataFrame(records).to_csv(output_csv, index=False)
+        print(f"\nSaved wrong-way violations to {output_csv}")
+
 if __name__ == "__main__":
-    # The default execution processes the dataset specified
-    dataset_file = r"D:\btp\narain_data\test1.csv"
-    detect_wrong_way_violations(dataset_file)
+    import argparse
+    parser = argparse.ArgumentParser(description="Wrong-way violation detector")
+    parser.add_argument("--csv", type=str, default=r"D:\btp\narain_data\full1_tracks (1).csv")
+    parser.add_argument("--output", type=str, default=r"D:\btp\Traffic_Object_Detection_and_Tracking\src\safety\wrong_way.csv")
+    args = parser.parse_args()
+    
+    detect_wrong_way_violations(args.csv, args.output)
