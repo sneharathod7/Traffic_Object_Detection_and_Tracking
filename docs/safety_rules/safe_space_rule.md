@@ -1,85 +1,43 @@
-# Safe Space & Lane Straddling Rules
+# Safe Space Evaluation Rules Documentation
 
-This document details the algorithm and implementation of the **Lane Straddling** and **Tailgating (Proximity Violation)** safety rules.
+This document details the algorithm, mathematical formulations, and code implementations of the **Safe Space Evaluation Rules** used in the traffic tracking pipeline, including Tailgating (Proximity Violation), Unsafe Overtaking, Sudden Braking, and Vehicle Stoppage.
 
 ---
 
-## 1. Lane Straddling Detection Rule
+## 1. Geometric & Calibration Framework
+All distance and speed calculations are performed in metric coordinates (meters, meters per second) derived dynamically from pixel space using the centralized calibration settings:
 
-### A. Context & Description
-Roundabouts are split into lanes to organize traffic flow. Straddling the boundary line between lanes reduces the effective capacity of the roundabout, blocks other vehicles, and increases collision risks.
+$$\text{SCALE} = \frac{\text{LANE\_WIDTH\_M}}{\text{LANE\_WIDTH\_PX}} = \frac{7.0}{85.0} \approx 0.082353 \text{ m/px}$$
 
-The rule states:
-> A vehicle is flagged for a lane straddling violation if its center point remains within a $\pm 0.5$ meter band of the lane boundary for a continuous duration of $\ge 30$ frames (1.0 second).
+| Boundary | Pixel Coordinate | Metric Radius (meters) | Description |
+| :--- | :--- | :--- | :--- |
+| **Inner boundary ($R_{\text{INNER}}$)** | $120.0 \text{ px}$ | $9.8824 \text{ m}$ | Inner island circle limit. |
+| **Lane separator ($R_{\text{SEPARATOR}}$)**| $200.0 \text{ px}$ | $16.4706 \text{ m}$ | Boundary separating Inner & Outer circulatory lanes. |
+| **Outer boundary ($R_{\text{OUTER}}$)** | $280.0 \text{ px}$ | $23.0588 \text{ m}$ | Outer roundabout boundary limit. |
 
-### B. Mathematical Formulation
-Let the lane boundary between the Inner and Outer lanes of the roundabout be located at a radial distance of:
-$$R_{\text{boundary}} = 10.0\text{ meters}$$
-
-For a vehicle radial distance $r_i$ at frame $i$, the straddling condition is:
-$$|r_i - R_{\text{boundary}}| \le 0.5\text{ meters}$$
-which evaluates to:
-$$9.5 \le r_i \le 10.5\text{ meters}$$
-
-### C. Code Snippets & Explanation
-The logic is implemented in [`safe_space_rule.py`](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/safety/safe_space_rule.py).
-
+Lanes are assigned dynamically based on the vehicle's radial distance $r_i$ from the center $(X_C, Y_C)$:
 ```python
-# Step 1: Assign Lane based on radial coordinate
 def assign_lane(r):
-    if 6.0 <= r < 10.0:
+    if R_INNER <= r < R_SEPARATOR:
         return 'Inner'
-    elif 10.0 <= r <= 14.0:
+    elif R_SEPARATOR <= r <= R_OUTER:
         return 'Outer'
-    else:
-        return 'None'
-
-df['lane'] = df['r'].apply(assign_lane)
-
-# Step 2: Flag Straddling Condition (close to r = 10.0)
-ring_df['is_straddling'] = (np.abs(ring_df['r'] - 10.0) <= 0.5)
+    return 'None'
 ```
-* **Explanation**: The roundabout is partitioned into `Inner` ($6.0\text{m} \le r < 10.0\text{m}$) and `Outer` ($10.0\text{m} \le r \le 14.0\text{m}$) lanes. The lane straddling condition marks any frame where the vehicle is within $0.5$ meters of the $10.0$ meter lane separator.
-
-```python
-# Step 3: Find consecutive frames of straddling
-for track_id, group in ring_df.groupby('track_id'):
-    group = group.sort_values('frame')
-    is_strad = group['is_straddling'].values
-    
-    # Calculate sizes of consecutive True sequences
-    cumsum = np.cumsum(~is_strad)
-    max_consecutive = 0
-    if is_strad.any():
-        counts = pd.Series(cumsum[is_strad]).value_counts()
-        if not counts.empty:
-            max_consecutive = counts.max()
-            
-    if max_consecutive >= 30:
-        straddling_violations.append({'track_id': track_id, 'class_name': class_name})
-```
-* **Explanation**: 
-  1. `~is_strad` inverts the boolean array (True becomes False, False becomes True).
-  2. `np.cumsum(~is_strad)` creates an index that increments only when the vehicle is *not* straddling. This means that during a continuous sequence of straddling frames, the cumulative sum remains constant.
-  3. Grouping by this sum and counting the size of the groups identifies the lengths of all continuous straddling blocks.
-  4. If the longest block is $\ge 30$ frames (1.0 second at 30 FPS), it is flagged.
 
 ---
 
-## 2. Tailgating (Proximity Violation) Rule
+## 2. Tailgating (Proximity Violation)
 
 ### A. Context & Description
-Tailgating occurs when a vehicle follows the vehicle ahead of it too closely, leaving an unsafe gap. If the lead vehicle brakes suddenly, a rear-end collision is highly likely.
-
-The rule states:
-> A vehicle is flagged for tailgating if its arc distance to the leading vehicle in the same lane is $< 4.0$ meters while traveling at a velocity $> 1.0\text{ m/s}$.
+Tailgating occurs when a vehicle follows the vehicle ahead of it too closely, leaving an unsafe distance. In case of sudden deceleration, a rear-end collision is highly likely.
 
 ### B. Mathematical Formulation
 To calculate the distance between two vehicles in a circular lane at a specific frame:
-1. We group all vehicles in the same lane (`Inner` or `Outer`) at the same frame.
-2. We sort them by their polar angle $\theta_i \in (-\pi, \pi]$.
+1. All vehicles in the same lane (`Inner` or `Outer`) at the same frame are grouped.
+2. They are sorted by their polar angle $\theta_i \in (-\pi, \pi]$ relative to the center.
 3. For a follower vehicle $A$ and its adjacent leader vehicle $B$ (where $B$ is ahead of $A$ in the angular order):
-   * **Angular separation ($\Delta\theta$)** (modulo $2\pi$ to account for wrapping):
+   * **Angular separation ($\Delta\theta$)** (modulo $2\pi$ to account for boundary wrapping):
      $$\Delta\theta = (\theta_B - \theta_A) \pmod{2\pi}$$
    * **Mean circular radius ($R_{\text{avg}}$)**:
      $$R_{\text{avg}} = \frac{r_A + r_B}{2}$$
@@ -88,11 +46,7 @@ To calculate the distance between two vehicles in a circular lane at a specific 
 4. A violation is flagged if:
    $$d < 4.0\text{ meters} \quad \text{and} \quad v_A > 1.0\text{ m/s}$$
 
----
-
-### C. Code Snippets & Explanation
-The tailgating detection loop processes each frame and lane dynamically:
-
+### C. Implementation Snippet
 ```python
 # Group frame-by-frame, then by lane
 for (frame, lane), group in ring_df.groupby(['frame', 'lane']):
@@ -113,7 +67,7 @@ for (frame, lane), group in ring_df.groupby(['frame', 'lane']):
         # Arc length formula: d = radius * delta_theta
         d = ((leader['r'] + follower['r']) / 2) * delta_theta
         
-        # Apply threshold criteria
+        # Apply threshold criteria (proximity < 4m, speed > 1m/s to ignore queues)
         if d < 4.0 and follower['velocity_ms'] > 1.0:
             tailgating_records.append({
                 'frame': frame,
@@ -124,9 +78,83 @@ for (frame, lane), group in ring_df.groupby(['frame', 'lane']):
                 'class_name': follower['class_name']
             })
 ```
-* **Explanation**:
-  1. We sort vehicles along the circular path by sorting their polar angle `theta`.
-  2. The next index `(i + 1) % n` retrieves the leader. The modulo `% n` ensures that the vehicle at the end of the array (e.g. angle $+\pi$) is correctly paired with the vehicle at the beginning of the array (e.g. angle $-\pi$), closing the loop.
-  3. `delta_theta = (leader['theta'] - follower['theta']) % (2 * np.pi)` handles the boundary wrap properly.
-  4. The arc distance is the product of the average radius of the two vehicles and their angular distance.
-  5. The velocity threshold (`follower['velocity_ms'] > 1.0`) prevents flagging parked or stationary vehicles queueing in congestion.
+
+---
+
+## 3. Unsafe Overtaking
+
+### A. Context & Description
+Unsafe overtaking is defined as passing another vehicle in the same circular lane with an lateral buffer zone of $< 1.5$ meters at the moment of crossover.
+
+### B. Mathematical Formulation
+For any vehicle $A$ overtaking vehicle $B$:
+1. **Crossover frame** is identified when vehicle $A$ passes vehicle $B$'s angular position ($\theta_A$ crosses $\theta_B$).
+2. The lateral distance difference at crossover is computed as:
+   $$d_{\text{lateral}} = |r_A - r_B|$$
+3. A violation is flagged if:
+   $$d_{\text{lateral}} < 1.5\text{ meters}$$
+
+---
+
+## 4. Sudden Braking
+
+### A. Context & Description
+Sudden braking violations capture high deceleration rates indicative of panic stops, conflicts, or near-miss incidents.
+
+### B. Mathematical Formulation
+1. **Smoothed Velocity**: A 7-frame rolling average filters high-frequency tracking noise:
+   $$v_{\text{smooth}, i} = \frac{1}{7} \sum_{k=0}^{6} v_{i-k}$$
+2. **Acceleration**: Deceleration rate is computed using the smoothed difference scaled by frame rate:
+   $$a_i = (v_{\text{smooth}, i} - v_{\text{smooth}, i-1}) \times \text{FPS}$$
+3. A violation is flagged if:
+   $$a_i < -6.0\text{ m/s}^2 \quad \text{and} \quad v_{\text{smooth}, i-1} > 3.0\text{ m/s}$$
+
+---
+
+## 5. Vehicle Stoppage
+
+### A. Context & Description
+Vehicles parking, stopping, or breaking down in active roundabout lanes creates significant safety hazards and bottlenecks.
+
+### B. Mathematical Formulation
+Over a rolling 90-frame window (3.0 seconds at 30 FPS):
+1. **Displacement**: Total physical movement from the start of the window is calculated:
+   $$d_{\text{displacement}} = \sqrt{(x_i - x_{i-90})^2 + (y_i - y_{i-90})^2}$$
+2. **Window Velocity**: Mean velocity during the window is computed:
+   $$\bar{v} = \frac{1}{90} \sum_{k=0}^{89} v_{i-k}$$
+3. A violation is flagged if:
+   $$d_{\text{displacement}} < 1.0\text{ meter} \quad \text{and} \quad \bar{v} < 0.8\text{ m/s}$$
+
+---
+
+## 6. Safe Space Evaluation Flowchart
+
+```mermaid
+graph TD
+    A[Start: Frame Data] --> B[Assign Circular Lanes: Inner vs Outer]
+    B --> C{Which Safe Space Rule is evaluated?}
+    
+    C -->|Tailgating| D[Sort vehicles in lane by polar angle]
+    D --> E[Compute arc distance between follower and leader]
+    E --> F{Distance < 4.0m and speed > 1.0m/s?}
+    F -- Yes --> G[Record Tailgating Violation]
+    F -- No --> H[No Violation]
+    
+    C -->|Unsafe Overtaking| I[Detect angular crossovers in same lane]
+    I --> J[Compute radial distance difference at crossover]
+    J --> K{Radial difference < 1.5m?}
+    K -- Yes --> L[Record Unsafe Overtaking Violation]
+    K -- No --> H
+    
+    C -->|Sudden Braking| M[Smooth velocity over 7 frames]
+    M --> N[Compute deceleration rate]
+    N --> O{Deceleration < -6.0 m/s2 and initial speed > 3.0 m/s?}
+    O -- Yes --> P[Record Sudden Braking Violation]
+    O -- No --> H
+    
+    C -->|Vehicle Stoppage| Q[Measure rolling displacement over 90 frames]
+    Q --> R[Compute average rolling speed]
+    R --> S{Displacement < 1.0m and speed < 0.8 m/s?}
+    S -- Yes --> T[Record Vehicle Stoppage Violation]
+    S -- No --> H
+```

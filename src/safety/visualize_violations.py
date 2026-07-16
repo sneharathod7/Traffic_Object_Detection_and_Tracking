@@ -6,7 +6,6 @@ import numpy as np
 from collections import defaultdict
 
 # BGR color palette matching the reference image styling
-RED = (0, 0, 255)       # Straddling
 ORANGE = (0, 140, 255)  # Tailgating
 YELLOW = (0, 220, 255)  # Leader (TG)
 MAGENTA = (255, 0, 255) # Overtaker (OT)
@@ -35,7 +34,6 @@ def load_tracks_df(csv_path):
 
 def load_violations(csv_path):
     df = pd.read_csv(csv_path)
-    straddling_tracks = set()
     tailgating_by_frame = defaultdict(list)
     overtaking_by_frame = defaultdict(list)
     braking_by_frame = defaultdict(list)
@@ -45,9 +43,7 @@ def load_violations(csv_path):
         vtype = row['violation_type']
         f = int(row['frame']) if not pd.isna(row['frame']) else -1
         
-        if vtype == 'Lane Straddling':
-            straddling_tracks.add(int(row['track_id']))
-        elif vtype == 'Tailgating':
+        if vtype == 'Tailgating':
             tailgating_by_frame[f].append({
                 'follower': int(row['track_id']),
                 'leader': int(row['leader_track_id']),
@@ -70,7 +66,7 @@ def load_violations(csv_path):
                 'd': float(row['d'])
             })
             
-    return straddling_tracks, tailgating_by_frame, overtaking_by_frame, braking_by_frame, stoppage_by_frame
+    return tailgating_by_frame, overtaking_by_frame, braking_by_frame, stoppage_by_frame
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize Roundabout Safe Space Violations on Video")
@@ -83,7 +79,7 @@ def main():
     parser.add_argument("--only-braking", action="store_true", help="Compile a video containing only frames with sudden braking")
     parser.add_argument("--only-stoppage", action="store_true", help="Compile a video containing only frames with vehicle stoppage")
     parser.add_argument("--violation-type", type=str, default="All", 
-                        choices=["All", "Lane Straddling", "Tailgating", "Unsafe Overtaking", "Sudden Braking", "Vehicle Stoppage"],
+                        choices=["All", "Tailgating", "Unsafe Overtaking", "Sudden Braking", "Vehicle Stoppage"],
                         help="Filter specific violation type to draw")
     
     args = parser.parse_args()
@@ -92,7 +88,7 @@ def main():
     tracks_by_frame = load_tracks_df(args.tracks)
     
     print(f"[visualizer] Loading violations from {args.violations} ...")
-    straddling_tracks, tailgating_by_frame, overtaking_by_frame, braking_by_frame, stoppage_by_frame = load_violations(args.violations)
+    tailgating_by_frame, overtaking_by_frame, braking_by_frame, stoppage_by_frame = load_violations(args.violations)
     
     # Pre-calculate active overtaking frame windows (e.g. 30 frames centered on crossover)
     active_overtaking_by_frame = defaultdict(list)
@@ -139,7 +135,6 @@ def main():
         
         # Build mapping of active violations per track in this frame
         violation_info = defaultdict(lambda: {
-            'is_straddling': False,
             'is_tailgating': False,
             'leader_id': None,
             'is_leader': False,
@@ -150,11 +145,6 @@ def main():
             'is_stoppage': False,
         })
         
-        for t in tracks:
-            tid = t['track_id']
-            if tid in straddling_tracks:
-                violation_info[tid]['is_straddling'] = True
-                
         for tg in tg_events:
             fol = tg['follower']
             ld = tg['leader']
@@ -179,8 +169,7 @@ def main():
             
         # Check output filtering options
         has_any_violation = (len(tg_events) > 0 or len(ot_events) > 0 or 
-                             len(brk_events) > 0 or len(stp_events) > 0 or
-                             any(violation_info[t['track_id']]['is_straddling'] for t in tracks))
+                             len(brk_events) > 0 or len(stp_events) > 0)
         has_active_overtaking = len(ot_events) > 0
         has_active_braking = len(brk_events) > 0
         has_active_stoppage = len(stp_events) > 0
@@ -258,14 +247,7 @@ def main():
                             color = CYAN
                             priority = 4
                 
-                # Check for Straddling
-                if args.violation_type in ["All", "Lane Straddling"]:
-                    if info['is_straddling']:
-                        tags.append("Straddling")
-                        if priority < 3:
-                            color = RED
-                            priority = 3
-                            
+
                 # Check for Tailgating
                 if args.violation_type in ["All", "Tailgating"]:
                     if info['is_tailgating']:

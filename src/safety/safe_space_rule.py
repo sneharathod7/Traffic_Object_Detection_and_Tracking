@@ -63,8 +63,6 @@ ring_df = df[df['lane'] != 'None'].copy()
 # 1. Total unique track IDs that entered the circulating ring
 unique_ring_tracks = ring_df['track_id'].nunique()
 
-# Step 2: Lane Straddling Violation (Removed)
-straddling_df = pd.DataFrame(columns=['track_id', 'class_name'])
 
 # Step 3: Detect Part B - Tailgating / Proximity Violation
 tailgating_records = []
@@ -287,7 +285,6 @@ if not stoppage_df.empty:
 else:
     print("No vehicle stoppage violations found.")
 
-straddling_export = pd.DataFrame()
 
 if not tailgating_df.empty:
     tailgating_export = tailgating_df.copy()
@@ -314,7 +311,7 @@ if not stoppage_df.empty:
 else:
     stoppage_export = pd.DataFrame()
 
-combined_df = pd.concat([straddling_export, tailgating_export, overtaking_export, braking_export, stoppage_export], ignore_index=True)
+combined_df = pd.concat([tailgating_export, overtaking_export, braking_export, stoppage_export], ignore_index=True)
 # Reorder columns for better readability
 columns_order = ['violation_type', 'frame', 'track_id', 'leader_track_id', 'class_name', 'lane', 'd']
 # Only keep columns that exist
