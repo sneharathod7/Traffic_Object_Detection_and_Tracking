@@ -51,7 +51,7 @@ def detect_unsafe_roundabout_shortcuts(csv_file: str, output_csv_path: str | Pat
         raise ValueError(f"Missing required columns in input CSV: {sorted(missing)}")
 
     if output_csv_path is None:
-        output_csv_path = Path(__file__).resolve().parent / "unsafe_shortcut_violations.csv"
+        output_csv_path = Path(__file__).resolve().parent / "csv_outputs" / "unsafe_shortcut_violations.csv"
     output_csv_path = Path(output_csv_path)
     output_csv_path.parent.mkdir(parents=True, exist_ok=True)
 

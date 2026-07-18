@@ -98,6 +98,8 @@ def detect_wrong_way_violations(csv_file, output_csv=None):
                 'start_frame': info['start_frame'],
                 'violation_type': 'Wrong-Way'
             })
+        import os
+        os.makedirs(os.path.dirname(os.path.abspath(output_csv)), exist_ok=True)
         pd.DataFrame(records).to_csv(output_csv, index=False)
         print(f"\nSaved wrong-way violations to {output_csv}")
 
@@ -105,7 +107,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Wrong-way violation detector")
     parser.add_argument("--csv", type=str, default=r"D:\btp\narain_data\full1_tracks (1).csv")
-    parser.add_argument("--output", type=str, default=r"D:\btp\Traffic_Object_Detection_and_Tracking\src\safety\wrong_way.csv")
+    parser.add_argument("--output", type=str, default=r"D:\btp\Traffic_Object_Detection_and_Tracking\src\safety\csv_outputs\wrong_way.csv")
     args = parser.parse_args()
     
     detect_wrong_way_violations(args.csv, args.output)

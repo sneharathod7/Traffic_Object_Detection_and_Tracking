@@ -6,7 +6,7 @@ import os
 # Parse command line arguments
 parser = argparse.ArgumentParser(description="Evaluate Safe Space Rules")
 parser.add_argument("--csv", type=str, default=None, help="Path to input tracks CSV")
-parser.add_argument("--output", type=str, default="rule.csv", help="Path to output violations CSV")
+parser.add_argument("--output", type=str, default=os.path.join(os.path.dirname(__file__), 'csv_outputs', 'rule.csv'), help="Path to output violations CSV")
 args, unknown = parser.parse_known_args()
 
 csv_path = args.csv
@@ -319,5 +319,6 @@ columns_order = ['violation_type', 'frame', 'track_id', 'leader_track_id', 'clas
 columns_order = [c for c in columns_order if c in combined_df.columns]
 combined_df = combined_df[columns_order]
 
+os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 combined_df.to_csv(output_path, index=False)
 print(f"\n11. All violations have been successfully saved to '{output_path}'.")

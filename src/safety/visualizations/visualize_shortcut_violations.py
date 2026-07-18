@@ -83,8 +83,8 @@ def visualize_shortcut_violations(
 
 
 if __name__ == "__main__":
-    video_file = r"D:\btp\narain_data\test1.mp4"
-    tracks_file = r"D:\btp\narain_data\test1.csv"
-    shortcut_file = r"D:\btp\Traffic_Object_Detection_and_Tracking\src\safety\unsafe_shortcut_violations.csv"
-    out_file = r"D:\btp\Traffic_Object_Detection_and_Tracking\outputs\video\test1_unsafe_shortcut.mp4"
+    video_file = r"D:\btp\narain_data\full1 (1).MP4"
+    tracks_file = r"D:\btp\narain_data\full1_tracks (1).csv"
+    shortcut_file = r"D:\btp\Traffic_Object_Detection_and_Tracking\src\safety\csv_outputs\unsafe_shortcut_violations.csv"
+    out_file = r"D:\btp\Traffic_Object_Detection_and_Tracking\outputs\video\full1_unsafe_shortcut.mp4"
     visualize_shortcut_violations(video_file, tracks_file, shortcut_file, out_file)

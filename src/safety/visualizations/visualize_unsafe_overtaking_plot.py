@@ -4,9 +4,9 @@ import matplotlib.patches as patches
 from pathlib import Path
 
 try:
-    from .calibration import CENTER_X as X_C, CENTER_Y as Y_C, R_OUTER
+    from ..calibration import CENTER_X as X_C, CENTER_Y as Y_C, R_OUTER
 except ImportError:
-    from calibration import CENTER_X as X_C, CENTER_Y as Y_C, R_OUTER
+    from safety.calibration import CENTER_X as X_C, CENTER_Y as Y_C, R_OUTER
 
 def plot_unsafe_overtaking(tracks_csv_path: str, violations_csv_path: str, output_img_path: str):
     print(f"[reporter] Loading overtaking violations from: {violations_csv_path}")
