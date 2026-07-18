@@ -1,0 +1,17 @@
+track_id,overtaken_vehicle_id,class_name,start_frame,location,violation_type,reason
+67,73,motorcycle,29,restricted zone,Unsafe Overtaking,Vehicle 67 overtook 73 inside restricted roundabout zone after approaching from the same direction
+67,100,motorcycle,75,restricted zone,Unsafe Overtaking,Vehicle 67 overtook 100 inside restricted roundabout zone after approaching from the same direction
+112,113,car,86,restricted zone,Unsafe Overtaking,Vehicle 112 overtook 113 inside restricted roundabout zone after approaching from the same direction
+308,363,motorcycle,415,restricted zone,Unsafe Overtaking,Vehicle 308 overtook 363 inside restricted roundabout zone after approaching from the same direction
+356,359,motorcycle,441,restricted zone,Unsafe Overtaking,Vehicle 356 overtook 359 inside restricted roundabout zone after approaching from the same direction
+394,399,motorcycle,486,restricted zone,Unsafe Overtaking,Vehicle 394 overtook 399 inside restricted roundabout zone after approaching from the same direction
+406,543,person,776,restricted zone,Unsafe Overtaking,Vehicle 406 overtook 543 inside restricted roundabout zone after approaching from the same direction
+435,667,motorcycle,1028,restricted zone,Unsafe Overtaking,Vehicle 435 overtook 667 inside restricted roundabout zone after approaching from the same direction
+543,818,motorcycle,1276,restricted zone,Unsafe Overtaking,Vehicle 543 overtook 818 inside restricted roundabout zone after approaching from the same direction
+543,848,motorcycle,1281,restricted zone,Unsafe Overtaking,Vehicle 543 overtook 848 inside restricted roundabout zone after approaching from the same direction
+546,616,car,881,restricted zone,Unsafe Overtaking,Vehicle 546 overtook 616 inside restricted roundabout zone after approaching from the same direction
+570,580,motorcycle,824,restricted zone,Unsafe Overtaking,Vehicle 570 overtook 580 inside restricted roundabout zone after approaching from the same direction
+583,616,motorcycle,881,restricted zone,Unsafe Overtaking,Vehicle 583 overtook 616 inside restricted roundabout zone after approaching from the same direction
+601,616,motorcycle,881,restricted zone,Unsafe Overtaking,Vehicle 601 overtook 616 inside restricted roundabout zone after approaching from the same direction
+695,799,motorcycle,1242,restricted zone,Unsafe Overtaking,Vehicle 695 overtook 799 inside restricted roundabout zone after approaching from the same direction
+1114,1181,car,1872,restricted zone,Unsafe Overtaking,Vehicle 1114 overtook 1181 inside restricted roundabout zone after approaching from the same direction

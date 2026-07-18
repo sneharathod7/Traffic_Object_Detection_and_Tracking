@@ -73,11 +73,12 @@ def detect_unsafe_overtaking(csv_file: str, output_csv_path: Union[str, Path, No
     df = _load_data(csv_file)
 
     if output_csv_path is None:
-        output_csv_path = Path(__file__).resolve().parent / "unsafe_overtaking_violations.csv"
+        output_csv_path = Path(__file__).resolve().parent / "csv_outputs" / "unsafe_overtaking_violations.csv"
     output_csv_path = Path(output_csv_path)
     output_csv_path.parent.mkdir(parents=True, exist_ok=True)
 
     tracks = {tid: group.sort_values("frame") for tid, group in df.groupby("track_id")}
+    tracks_indexed = {tid: t.set_index("frame") for tid, t in tracks.items()}
     directions: Dict[int, Tuple[float, float]] = {}
     for tid, track in tracks.items():
         heading = _track_direction(track)
@@ -102,6 +103,8 @@ def detect_unsafe_overtaking(csv_file: str, output_csv_path: Union[str, Path, No
             for oth_id in other_ids:
                 if oth_id == track_id or (track_id, oth_id) in seen_pairs:
                     continue
+                seen_pairs.add((track_id, oth_id))
+                seen_pairs.add((oth_id, track_id))
                 if oth_id not in directions:
                     continue
                 dir_b = directions[oth_id]
@@ -117,8 +120,8 @@ def detect_unsafe_overtaking(csv_file: str, output_csv_path: Union[str, Path, No
                 if rel_dir == (0.0, 0.0):
                     continue
 
-                track_rows = track.set_index("frame")
-                other_rows = other.set_index("frame")
+                track_rows = tracks_indexed[track_id]
+                other_rows = tracks_indexed[oth_id]
 
                 sequence = []
                 for frame_id in overlap_frames:
@@ -208,10 +211,16 @@ def detect_unsafe_overtaking(csv_file: str, output_csv_path: Union[str, Path, No
         ],
     )
     output_df.to_csv(output_csv_path, index=False)
-    print(f"Saved {len(output_df)} unsafe overtaking violation(s) → {output_csv_path}")
+    print(f"Saved {len(output_df)} unsafe overtaking violation(s) -> {output_csv_path}")
     return output_csv_path
 
 
 if __name__ == "__main__":
-    default_tracks = Path(__file__).resolve().parent.parent / "outputs" / "csv" / "full1_tracks.csv"
+    import os
+    default_tracks = r"D:\btp\narain_data\full1_tracks (1).csv"
+    if not os.path.exists(default_tracks):
+        possible_path = os.path.join(os.path.dirname(__file__), "..", "..", "narain_data", "full1_tracks (1).csv")
+        if os.path.exists(possible_path):
+            default_tracks = possible_path
+            
     detect_unsafe_overtaking(str(default_tracks))

@@ -1,12 +1,14 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import sys
+import os
 from pathlib import Path
 
-try:
-    from ..calibration import CENTER_X as X_C, CENTER_Y as Y_C, R_OUTER
-except ImportError:
-    from safety.calibration import CENTER_X as X_C, CENTER_Y as Y_C, R_OUTER
+# Add parent directory to sys.path to resolve imports when run directly
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from calibration import CENTER_X as X_C, CENTER_Y as Y_C, R_OUTER
 
 def plot_unsafe_overtaking(tracks_csv_path: str, violations_csv_path: str, output_img_path: str):
     print(f"[reporter] Loading overtaking violations from: {violations_csv_path}")
