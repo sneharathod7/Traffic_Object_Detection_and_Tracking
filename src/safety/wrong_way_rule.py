@@ -30,7 +30,7 @@ def detect_wrong_way_violations(csv_file, output_csv=None):
 
     # Flag to keep track of violations
     violations = {}
-
+## consider the entry and exit, observation window is too small which is 2/30
     for track_id, group in df.groupby('track_id'):
         group = group.copy()
         

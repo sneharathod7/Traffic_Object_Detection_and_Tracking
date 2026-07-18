@@ -25,11 +25,12 @@ if csv_path is None:
             if os.path.exists(possible_path):
                 csv_path = possible_path
 
-# If path still doesn't exist, fallback to D:\btp\narain_data\test1.csv
+# If path still doesn't exist, fallback to D:\btp\narain_data\full1_tracks (1).csv or test1.csv
 if not csv_path or not os.path.exists(csv_path):
-    possible_fallback = r'D:\btp\narain_data\test1.csv'
-    if os.path.exists(possible_fallback):
-        csv_path = possible_fallback
+    for possible_fallback in [r'D:\btp\narain_data\full1_tracks (1).csv', r'D:\btp\narain_data\test1.csv']:
+        if os.path.exists(possible_fallback):
+            csv_path = possible_fallback
+            break
 
 df = pd.read_csv(csv_path)
 

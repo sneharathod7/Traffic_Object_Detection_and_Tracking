@@ -87,6 +87,7 @@ def detect_unsafe_roundabout_shortcuts(csv_file: str, output_csv_path: str | Pat
         # Angular traversal check
         theta = np.arctan2(track["dy"], track["dx"])
         theta_unwrapped = np.unwrap(theta)
+        #check for th4 unwrappng
         total_angular_change = np.abs(theta_unwrapped[-1] - theta_unwrapped[0]) * 180.0 / np.pi
 
         is_shortcut = False
@@ -150,5 +151,11 @@ def detect_unsafe_roundabout_shortcuts(csv_file: str, output_csv_path: str | Pat
 
 
 if __name__ == "__main__":
-    default_tracks = r"D:\btp\narain_data\test1.csv"
+    import os
+    default_tracks = r"D:\btp\narain_data\full1_tracks (1).csv"
+    if not os.path.exists(default_tracks):
+        possible_path = os.path.join(os.path.dirname(__file__), "..", "..", "narain_data", "full1_tracks (1).csv")
+        if os.path.exists(possible_path):
+            default_tracks = possible_path
+            
     detect_unsafe_roundabout_shortcuts(default_tracks)

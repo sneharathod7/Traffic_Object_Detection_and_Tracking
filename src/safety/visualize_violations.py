@@ -70,10 +70,10 @@ def load_violations(csv_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize Roundabout Safe Space Violations on Video")
-    parser.add_argument("--video", required=True, help="Path to original input video")
-    parser.add_argument("--tracks", required=True, help="Path to tracking CSV annotations")
-    parser.add_argument("--violations", required=True, help="Path to safe space violations CSV")
-    parser.add_argument("--output", required=True, help="Path to save annotated output video")
+    parser.add_argument("--video", default=r"D:\btp\narain_data\full1 (1).MP4", help="Path to original input video")
+    parser.add_argument("--tracks", default=r"D:\btp\narain_data\full1_tracks (1).csv", help="Path to tracking CSV annotations")
+    parser.add_argument("--violations", default=r"D:\btp\Traffic_Object_Detection_and_Tracking\src\safety\rule.csv", help="Path to safe space violations CSV")
+    parser.add_argument("--output", default=r"D:\btp\Traffic_Object_Detection_and_Tracking\outputs\video\full1_safe_space_annotated.mp4", help="Path to save annotated output video")
     parser.add_argument("--only-violations", action="store_true", help="Compile a video containing only frames with violations")
     parser.add_argument("--only-overtaking", action="store_true", help="Compile a video containing only frames with active overtaking")
     parser.add_argument("--only-braking", action="store_true", help="Compile a video containing only frames with sudden braking")
