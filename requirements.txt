@@ -17,7 +17,7 @@ tqdm>=4.65.0                # Progress bar for frame-level loop
 pandas>=2.0.0               # Optional: post-processing / analysis of output CSV
 
 # SAHI & Supervision additions
-sahi>=0.14.0                # DINO/ultralytics adapter + improved tile fusion
+sahi>=0.11.0                # DINO/ultralytics adapter + improved tile fusion
 supervision>=0.20.0
 
 # ONNX (optional — for DINO model export/optimisation)
