@@ -173,8 +173,8 @@ class SahiDinoDetector:
     def __init__(
         self,
         model_path: str = "rtdetr-x.pt",
-        slice_height: int = 384,
-        slice_width: int = 384,
+        slice_height: int = 256,
+        slice_width: int = 256,
         overlap_height_ratio: float = 0.75,
         overlap_width_ratio: float = 0.75,
         conf: float = 0.10,

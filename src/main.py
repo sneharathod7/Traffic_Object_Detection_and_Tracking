@@ -123,9 +123,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Fractional overlap between adjacent tiles (0.0–0.75) for YOLOv8.")
     det.add_argument("--tta", action="store_true",
                      help="Enable test-time augmentation for YOLOv8 (slower, more accurate).")
-    det.add_argument("--slice-height", type=int, default=384,
+    det.add_argument("--slice-height", type=int, default=256,
                      help="SAHI slice height.")
-    det.add_argument("--slice-width", type=int, default=384,
+    det.add_argument("--slice-width", type=int, default=256,
                      help="SAHI slice width.")
     det.add_argument("--overlap-height-ratio", type=float, default=0.75,
                      help="SAHI slice overlap height ratio.")
