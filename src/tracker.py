@@ -321,9 +321,15 @@ class STrack:
         self._init_kalman(bbox_xyxy)
 
     @classmethod
-    def reset_id_counter(cls) -> None:
-        """Reset the global ID counter (useful between video clips)."""
-        cls._id_counter = 0
+    def reset_id_counter(cls, start: int = 0) -> None:
+        """Reset the global ID counter (useful between video clips).
+        
+        Args:
+            start: The value to reset the counter to (default 0).
+                   Set to the last known track_id to continue numbering
+                   from a checkpoint without gaps or duplicates.
+        """
+        cls._id_counter = start
 
     # ---- Kalman setup --------------------------------------------------------
 

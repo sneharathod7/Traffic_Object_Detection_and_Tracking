@@ -81,6 +81,7 @@ class Exporter:
         draw_trajectories: bool  = True,
         trajectory_length: int   = 30,        # frames of history to display
         clean_draw:        bool  = False,     # suppress verbose class labels
+        append_mode:       bool  = False,     # If True, append to CSV (for resume)
     ) -> None:
         self.fps               = fps
         self.draw_trajectories = draw_trajectories
@@ -90,10 +91,12 @@ class Exporter:
 
         # ------- CSV writer --------------------------------------------------
         Path(output_csv_path).parent.mkdir(parents=True, exist_ok=True)
-        self._csv_file   = open(output_csv_path, "w", newline="", encoding="utf-8")
+        csv_mode = "a" if append_mode else "w"
+        self._csv_file   = open(output_csv_path, csv_mode, newline="", encoding="utf-8")
         self._csv_writer = csv.DictWriter(self._csv_file, fieldnames=_CSV_HEADER)
-        self._csv_writer.writeheader()
-        logger.info("CSV output: %s", output_csv_path)
+        if not append_mode:
+            self._csv_writer.writeheader()  # Only write header for fresh runs
+        logger.info("CSV output (%s mode): %s", csv_mode, output_csv_path)
 
         # ------- Video writer ------------------------------------------------
         self._video_writer: Optional[cv2.VideoWriter] = None
