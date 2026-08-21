@@ -16,7 +16,7 @@ def detect_wrong_way_violations(csv_file, output_csv=None):
 
     FPS = 30.0
     OMEGA_THRESHOLD = -0.1
-    CONSECUTIVE_FRAMES_THRESHOLD = 15
+    CONSECUTIVE_FRAMES_THRESHOLD = 30  # 1.0 second at 30 FPS
 
     # 1. Calculate Polar Radius 'r' and Angle 'theta'
     # Assuming the coordinates to use are world_x and world_y
@@ -106,7 +106,7 @@ def detect_wrong_way_violations(csv_file, output_csv=None):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Wrong-way violation detector")
-    parser.add_argument("--csv", type=str, default=r"D:\btp\narain_data\full1_tracks (1).csv")
+    parser.add_argument("--csv", type=str, default=r"D:\btp\narain_data\long1_tracks_narain_cleaned_edited.csv")
     parser.add_argument("--output", type=str, default=r"D:\btp\Traffic_Object_Detection_and_Tracking\src\safety\csv_outputs\wrong_way.csv")
     args = parser.parse_args()
     

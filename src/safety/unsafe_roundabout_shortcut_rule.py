@@ -152,9 +152,9 @@ def detect_unsafe_roundabout_shortcuts(csv_file: str, output_csv_path: str | Pat
 
 if __name__ == "__main__":
     import os
-    default_tracks = r"D:\btp\narain_data\full1_tracks (1).csv"
+    default_tracks = r"D:\btp\narain_data\long1_tracks_narain_cleaned_edited.csv"
     if not os.path.exists(default_tracks):
-        possible_path = os.path.join(os.path.dirname(__file__), "..", "..", "narain_data", "full1_tracks (1).csv")
+        possible_path = os.path.join(os.path.dirname(__file__), "..", "..", "narain_data", "long1_tracks_narain_cleaned_edited.csv")
         if os.path.exists(possible_path):
             default_tracks = possible_path
             

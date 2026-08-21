@@ -127,6 +127,10 @@ def detect_unsafe_overtaking(csv_file: str, output_csv_path: Union[str, Path, No
                 for frame_id in overlap_frames:
                     row_a = track_rows.loc[frame_id]
                     row_b = other_rows.loc[frame_id]
+                    if isinstance(row_a, pd.DataFrame):
+                        row_a = row_a.iloc[0]
+                    if isinstance(row_b, pd.DataFrame):
+                        row_b = row_b.iloc[0]
                     rel = (float(row_a["world_x"]) - float(row_b["world_x"]),
                            float(row_a["world_y"]) - float(row_b["world_y"]))
                     forward = _dot(rel, rel_dir)
@@ -217,9 +221,9 @@ def detect_unsafe_overtaking(csv_file: str, output_csv_path: Union[str, Path, No
 
 if __name__ == "__main__":
     import os
-    default_tracks = r"D:\btp\narain_data\full1_tracks (1).csv"
+    default_tracks = r"D:\btp\narain_data\long1_tracks_narain_cleaned_edited.csv"
     if not os.path.exists(default_tracks):
-        possible_path = os.path.join(os.path.dirname(__file__), "..", "..", "narain_data", "full1_tracks (1).csv")
+        possible_path = os.path.join(os.path.dirname(__file__), "..", "..", "narain_data", "long1_tracks_narain_cleaned_edited.csv")
         if os.path.exists(possible_path):
             default_tracks = possible_path
             

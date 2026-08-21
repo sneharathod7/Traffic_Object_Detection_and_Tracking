@@ -109,7 +109,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Visualize wrong-way driving violations on video")
     parser.add_argument("--video", type=str, default=r"D:\btp\narain_data\full1 (1).MP4")
-    parser.add_argument("--tracks", type=str, default=r"D:\btp\narain_data\full1_tracks (1).csv")
+    parser.add_argument("--tracks", type=str, default=r"D:\btp\narain_data\long1_tracks_narain_cleaned_edited.csv")
     parser.add_argument("--violations", type=str, default=r"D:\btp\Traffic_Object_Detection_and_Tracking\src\safety\csv_outputs\wrong_way.csv")
     parser.add_argument("--output", type=str, default=r"D:\btp\Traffic_Object_Detection_and_Tracking\outputs\video\full1_wrong_way_annotated.mp4")
     args = parser.parse_args()
