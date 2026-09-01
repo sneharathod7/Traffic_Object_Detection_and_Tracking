@@ -19,9 +19,32 @@ def _resolve(path_str: str) -> str:
             return os.path.abspath(c)
     return path_str
 
-# Load the dataset
-csv_path = r'data\long1_tracks_narain_cleaned_edited.csv'
+import argparse
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Tailgating / Safe-Space Rule Violation Detection")
+    # Put your input trajectory CSV path here:
+    parser.add_argument("--tracks", type=str, default="data/tracks.csv", help="Path to input trajectory CSV file (e.g. data/tracks.csv)")
+    # Put your output violations CSV path here:
+    parser.add_argument("--output", type=str, default="outputs/tailgating_violations.csv", help="Path to output violations CSV file")
+    return parser.parse_args()
+
+args = parse_args()
+# Put the path to your input trajectory CSV file here:
+csv_path = args.tracks
 resolved_csv = _resolve(csv_path)
+
+if not os.path.exists(resolved_csv):
+    # Fallback to local data candidates if default doesn't exist
+    fallback_cands = [
+        "data/long1_tracks_narain_cleaned_edited.csv",
+        "newsafety_rules/data/long1_tracks_narain_cleaned_edited.csv",
+    ]
+    for cand in fallback_cands:
+        if os.path.exists(_resolve(cand)):
+            resolved_csv = _resolve(cand)
+            break
+
 df = pd.read_csv(resolved_csv)
 
 # Parameters
@@ -109,5 +132,5 @@ if not tailgating_df.empty:
 else:
     combined_export = pd.DataFrame(columns=['violation_type', 'frame', 'track_id', 'leader_track_id', 'class_name', 'lane', 'd'])
 
-combined_export.to_csv('rule.csv', index=False)
-print("\n4. All tailgating violations have been successfully saved to 'rule.csv'.")
+combined_export.to_csv(args.output, index=False)
+print(f"\n4. All tailgating violations have been successfully saved to '{args.output}'.")

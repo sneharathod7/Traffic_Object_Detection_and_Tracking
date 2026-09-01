@@ -55,7 +55,7 @@ An overtaking maneuver is valid if the following conditions are met in sequence 
 
 ## 3. Code Implementation & Explanation
 
-The logic is implemented in [`unsafe_overtaking_rule.py`](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/safety/unsafe_overtaking_rule.py).
+The logic is implemented in [`src/safety/unsafe_overtaking_rule.py`](../../src/safety/unsafe_overtaking_rule.py).
 
 ### Global Heading Vector Calculation
 ```python

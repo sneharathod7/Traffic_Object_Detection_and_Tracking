@@ -9,12 +9,15 @@ from pathlib import Path
 from collections import deque
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
-XML_PATH     = r"d:\BTP\Traffic_Object_Detection_and_Tracking\ground_truth\groundtruth.xml"
-RAW_PRED_CSV = r"d:\BTP\Traffic_Object_Detection_and_Tracking\outputs\csv\full1_tracks.csv"
-OUT_CSV      = r"d:\BTP\Traffic_Object_Detection_and_Tracking\ground_truth\ground_truth.csv"
-OUT_VIDEO    = r"d:\BTP\Traffic_Object_Detection_and_Tracking\ground_truth\ground_truth_preview_cleandraw.mp4"
-VIDEO_INPUT  = r"d:\BTP\Traffic_Object_Detection_and_Tracking\data\video\full1.MP4"
-METRICS_TXT  = r"d:\BTP\Traffic_Object_Detection_and_Tracking\ground_truth\metrics_report.txt"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Put your file paths here (relative to project root or custom paths):
+XML_PATH     = str(PROJECT_ROOT / "ground_truth" / "groundtruth.xml")
+RAW_PRED_CSV = str(PROJECT_ROOT / "outputs" / "csv" / "full1_tracks.csv")
+OUT_CSV      = str(PROJECT_ROOT / "ground_truth" / "ground_truth.csv")
+OUT_VIDEO    = str(PROJECT_ROOT / "ground_truth" / "ground_truth_preview_cleandraw.mp4")
+VIDEO_INPUT  = str(PROJECT_ROOT / "data" / "video" / "full1.MP4")
+METRICS_TXT  = str(PROJECT_ROOT / "ground_truth" / "metrics_report.txt")
 
 MAX_FRAME    = 299
 IOU_THRESH   = 0.5  # For matching prediction bounding boxes to ground truth

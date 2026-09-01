@@ -48,7 +48,7 @@ We define a negative threshold $\omega_{\text{threshold}} = -0.1$ rad/s to ignor
 
 ## 3. Code Implementation & Explanation
 
-The core logic is implemented in [`wrong_way_rule.py`](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/safety/wrong_way_rule.py).
+The core logic is implemented in [`src/safety/wrong_way_rule.py`](../../src/safety/wrong_way_rule.py).
 
 ### Coordinate Conversion & Angle Calculation
 ```python

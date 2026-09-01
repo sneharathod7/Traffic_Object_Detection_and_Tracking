@@ -57,7 +57,7 @@ If this count is $\ge 2$ (excluding the target vehicle), the frame is flagged as
 ---
 
 ## 3. Code Walkthrough
-The rule is implemented in [`unsafe_roundabout_shortcut_rule.py`](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/safety/unsafe_roundabout_shortcut_rule.py).
+The rule is implemented in [`src/safety/unsafe_roundabout_shortcut_rule.py`](../../src/safety/unsafe_roundabout_shortcut_rule.py).
 
 ### Step 1: Compass Direction Mapping
 The quadrant mapping uses relative offsets to assign heading quadrants:

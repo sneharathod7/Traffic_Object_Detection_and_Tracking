@@ -152,9 +152,17 @@ def visualize_violations(
     print("Done generating visualization!")
 
 if __name__ == "__main__":
-    video_file = r"data\intersection.mp4"
-    tracks_file = r"data\long1_tracks_narain_cleaned_edited.csv"
-    rule_file = r"rule.csv"
-    out_file = r"outputs\video\test1_violations_only.mp4"
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Visualize Tailgating / Safe-Space Violations")
+    # Put your video file path here:
+    parser.add_argument("--video", type=str, default="data/intersection.mp4", help="Path to input video file (e.g. data/intersection.mp4)")
+    # Put your trajectory tracks CSV path here:
+    parser.add_argument("--tracks", type=str, default="data/tracks.csv", help="Path to trajectory tracks CSV file (e.g. data/tracks.csv)")
+    # Put your tailgating rule violations CSV path here:
+    parser.add_argument("--rule", type=str, default="outputs/tailgating_violations.csv", help="Path to violations CSV file (e.g. outputs/tailgating_violations.csv)")
+    # Put your output annotated video path here:
+    parser.add_argument("--output", type=str, default="outputs/video/tailgating_annotated.mp4", help="Path to output annotated video")
     
-    visualize_violations(video_file, tracks_file, rule_file, out_file)
+    args = parser.parse_args()
+    visualize_violations(args.video, args.tracks, args.rule, args.output)

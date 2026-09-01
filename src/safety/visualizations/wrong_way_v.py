@@ -336,10 +336,18 @@ def visualize_wrong_way(
     print("Done generating wrong-way visualization!")
 
 if __name__ == "__main__":
-    video_file = r"data\intersection.mp4"
-    tracks_file = r"data\long1_tracks_narain_cleaned_edited.csv"
-    wrong_way_file = r"D:\btp\Traffic_Object_Detection_and_Tracking\src\safety\wrong_way.csv"
-    out_file = r"D:\btp\Traffic_Object_Detection_and_Tracking\outputs\video\before_calibration_ouput.Mp4"
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Visualize Wrong-Way Driving Violations")
+    # Put your video file path here:
+    parser.add_argument("--video", type=str, default="data/intersection.mp4", help="Path to input video file (e.g. data/intersection.mp4)")
+    # Put your trajectory tracks CSV path here:
+    parser.add_argument("--tracks", type=str, default="data/tracks.csv", help="Path to trajectory tracks CSV file")
+    # Put your wrong-way violations CSV path here:
+    parser.add_argument("--violations", type=str, default="outputs/wrong_way.csv", help="Path to wrong-way violations CSV")
+    # Put your output annotated video path here:
+    parser.add_argument("--output", type=str, default="outputs/video/wrong_way_annotated.mp4", help="Path to output annotated video")
     
-    visualize_wrong_way(video_file, tracks_file, wrong_way_file, out_file)
+    args = parser.parse_args()
+    visualize_wrong_way(args.video, args.tracks, args.violations, args.output)
 

@@ -50,7 +50,7 @@ graph TD
 ```
 
 ### Stage 1: Sliced Object Detection
-* **Files**: [detection.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/detection.py), [sahi_dino_detection.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/sahi_dino_detection.py), [sahi_rtdetr_detection.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/sahi_rtdetr_detection.py), [tiling.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/tiling.py), [sahi_fusion.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/sahi_fusion.py)
+* **Files**: [`src/detection.py`](src/detection.py), [`src/sahi_dino_detection.py`](src/sahi_dino_detection.py), [`src/sahi_rtdetr_detection.py`](src/sahi_rtdetr_detection.py), [`src/tiling.py`](src/tiling.py), [`src/sahi_fusion.py`](src/sahi_fusion.py)
 * **Concept**: Instead of downsampling high-resolution drone footage (which destroys small objects), the frame is split into overlapping tiles (e.g., $512 \times 512$ or $640 \times 640$ grid) with a $20\%-35\%$ overlap.
 * **Backends**:
   - **YOLOv8** (CNN-based anchor-free model)
@@ -58,14 +58,14 @@ graph TD
 * **Deduplication (Weighted Box Fusion)**: Detections falling in overlapping tile boundaries are grouped by class and center-point proximity. Lower-confidence duplicates are suppressed if their Intersection-over-Union (IoU) with the group anchor exceeds a threshold ($0.35$).
 
 ### Stage 2: Geometrical Post-Processing & Relabeling
-* **File**: [postprocess_vehicle_classes.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/postprocess_vehicle_classes.py)
+* **File**: [`src/postprocess_vehicle_classes.py`](src/postprocess_vehicle_classes.py)
 * **Concept**: Deep learning models often associate absolute bounding-box area with class tags. From high-altitude drone footage, cars are small and are frequently mislabeled as motorcycles, or large SUVs are mislabeled as trucks.
 * **Constraints**:
   - **Car-to-Motorcycle Downgrade**: If a `car` bounding-box length is less than $32.0$ pixels, it is geometrically impossible to be a car based on scale. It is reassigned to `motorcycle`.
   - **Truck-to-Car Downgrade**: Heavy trucks are rare in standard city intersection footage. Large vehicle detections flagged as `truck` (Class 7) are overridden to `car` (Class 2) to maintain a clean four-class taxonomy (Person, Car, Motorcycle, Bus).
 
 ### Stage 3: Multi-Cue Tracking
-* **Files**: [tracker.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/tracker.py), [reid.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/reid.py)
+* **Files**: [`src/tracker.py`](src/tracker.py), [`src/reid.py`](src/reid.py)
 * **Concept**: A custom ByteTrack framework combined with Kalman filtering and deep visual appearance descriptors.
 * **Tracking Features (The 10-Layer Logic)**:
   1. **Distance-IoU (DIoU) Assignment**: Penalizes center-point displacement in the Hungarian matching cost matrix to prevent overlapping vehicles from stealing track IDs.
@@ -80,7 +80,7 @@ graph TD
   10. **Nascent ID Switch Repair**: Retroactively merges new short tracks with recently lost tracks of the same class if they are spatially and visually identical.
 
 ### Stage 4: Trajectory Smoothing & Coordinate Mapping
-* **Files**: [smoothing.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/smoothing.py), [homography.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/homography.py)
+* **Files**: [`src/smoothing.py`](src/smoothing.py), [`src/homography.py`](src/homography.py)
 * **Trajectory Smoothing**: Sub-pixel detection oscillation is smoothed using a $7$-frame Moving Average low-pass filter. This removes high-frequency jitter and stabilizes derivative velocity calculations.
 * **Coordinate Mapping**: Maps 2D pixel coordinates to metric coordinates (meters):
   - **Scale Factor Method**: Perfect for strictly top-down (Nadir) camera angles. $\text{Scale} = \text{Real Length (m)} / \text{Pixel Length (px)}$.
@@ -88,7 +88,7 @@ graph TD
 * **Velocity Estimation**: Calculated using the Euclidean distance difference between consecutive frames multiplied by the video Frame Rate (FPS).
 
 ### Stage 5: Asynchronous Exporter & Diagnostics
-* **Files**: [export.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/export.py), [diagnostics.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/diagnostics.py)
+* **Files**: [`src/export.py`](src/export.py), [`src/diagnostics.py`](src/diagnostics.py)
 * **Asynchronous Output Rendering**: Video encoding is written using a background daemon thread that consumes a frame queue. This decouples file I/O from tracking logic and boosts pipeline throughput.
 * **Track Diagnostics**: Automatically scans trajectories for gaps. If a track drops or suffers fragmentation, the pipeline crops and exports a $3$-second failure clip to `outputs/debug/motorcycle_failures/` for diagnostic inspection.
 
@@ -96,16 +96,16 @@ graph TD
 
 ## 3. Safety Analysis Rules Engine
 
-Once the tracking pipeline writes the trajectory metrics to a CSV, the safety-rules engine can ingest the file to flag traffic violations. The parameters (e.g., center coordinates, inner/outer radii) are defined in [calibration.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/safety/calibration.py).
+Once the tracking pipeline writes the trajectory metrics to a CSV, the safety-rules engine can ingest the file to flag traffic violations. The parameters (e.g., center coordinates, inner/outer radii) are defined in [`src/safety/calibration.py`](src/safety/calibration.py).
 
 The safety engine implements several standalone rules:
 
 | Rule | Location | Target Behavior | Core Math/Logic |
 |---|---|---|---|
-| **Wrong-Way Driving** | [wrong_way_rule.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/safety/wrong_way_rule.py) | Vehicles moving clockwise inside a counter-clockwise roundabout. | Polar coordinate conversion. Angular velocity $\omega < -0.1$ rad/s persisting for $\ge 30$ consecutive frames. |
-| **Tailgating / Proximity** | [safe_space_rule.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/safety/safe_space_rule.py) | Following too closely behind another vehicle in the same lane. | Arc-length gap $d = \frac{r_j + r_i}{2} \times \Delta\theta_{\text{wrapped}} < 4.0$ meters while the follower speed exceeds $1.0$ m/s. |
-| **Unsafe Overtaking** | [unsafe_overtaking_rule.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/safety/unsafe_overtaking_rule.py) | Passing a same-lane vehicle with dangerously close lateral spacing. | Angular coordinate cross-over sign changes. Computes relative longitudinal coordinate (`forward` dot product) and lateral deviation (`lateral` cross product) within a restricted zone. |
-| **Unsafe Roundabout Shortcut** | [unsafe_roundabout_shortcut_rule.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/safety/unsafe_roundabout_shortcut_rule.py) | Cutting corners (e.g., turning right directly clockwise). | Computes total unwrapped angular trajectory change. If entry/exit directions belong to shortcut paths (e.g., North-to-West, South-to-East) and total angular change is $< 150^{\circ}$ during congestion, a violation is flagged. |
+| **Wrong-Way Driving** | [`src/safety/wrong_way_rule.py`](src/safety/wrong_way_rule.py) | Vehicles moving clockwise inside a counter-clockwise roundabout. | Polar coordinate conversion. Angular velocity $\omega < -0.1$ rad/s persisting for $\ge 30$ consecutive frames. |
+| **Tailgating / Proximity** | [`src/safety/safe_space_rule.py`](src/safety/safe_space_rule.py) | Following too closely behind another vehicle in the same lane. | Arc-length gap $d = \frac{r_j + r_i}{2} \times \Delta\theta_{\text{wrapped}} < 4.0$ meters while the follower speed exceeds $1.0$ m/s. |
+| **Unsafe Overtaking** | [`src/safety/unsafe_overtaking_rule.py`](src/safety/unsafe_overtaking_rule.py) | Passing a same-lane vehicle with dangerously close lateral spacing. | Angular coordinate cross-over sign changes. Computes relative longitudinal coordinate (`forward` dot product) and lateral deviation (`lateral` cross product) within a restricted zone. |
+| **Unsafe Roundabout Shortcut** | [`src/safety/unsafe_roundabout_shortcut_rule.py`](src/safety/unsafe_roundabout_shortcut_rule.py) | Cutting corners (e.g., turning right directly clockwise). | Computes total unwrapped angular trajectory change. If entry/exit directions belong to shortcut paths (e.g., North-to-West, South-to-East) and total angular change is $< 150^{\circ}$ during congestion, a violation is flagged. |
 
 ---
 
@@ -281,13 +281,13 @@ If you want to integrate a new detector model family (e.g., YOLOv10, Grounding D
        ...
    ]
    ```
-2. **Integration**: Register your detector backend in [main.py](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/main.py)'s CLI options:
+2. **Integration**: Register your detector backend in [`src/main.py`](src/main.py)'s CLI options:
    - Update `build_parser()` choices for the `--detector` argument.
    - Instantiation logic: search for `# Initialize detector` inside `main.py` and map your CLI key to your detector class.
 
 ### Creating a New Safety Rule
 To implement a new safety rule (e.g., Lane-Change frequency, Pedestrian-Encroachment):
-1. **Script Template**: Create a standalone python file in [src/safety/](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/safety/). It should be executable via command-line arguments:
+1. **Script Template**: Create a standalone python file in [`src/safety/`](src/safety/). It should be executable via command-line arguments:
    ```python
    if __name__ == "__main__":
        import argparse
@@ -298,7 +298,7 @@ To implement a new safety rule (e.g., Lane-Change frequency, Pedestrian-Encroach
        evaluate_rule(args.csv, args.output)
    ```
 2. **Tabular Output Design**: Make sure violations are written into a structured CSV so that visualization tools can ingest them. Include keys such as `violation_type`, `frame`, `track_id`, `lane`, and any metric parameters (like distance or deceleration rate).
-3. **Documentation**: Add your rule's mathematical formula, parameters, and pseudocode to the [rules_explanation.md](file:///d:/btp/Traffic_Object_Detection_and_Tracking/src/safety/rules_explanation.md).
+3. **Documentation**: Add your rule's mathematical formula, parameters, and pseudocode to the [rules_explanation.md](src/safety/rules_explanation.md).
 
 ### Coding Standards & Pull Request Checklist
 - **Coding Conventions**: All new code should adhere to PEP 8 style standards. Use type annotations on all function signatures.

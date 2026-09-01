@@ -117,4 +117,4 @@ python step3_train_final.py
 python step4_visualize.py
 ```
 
-*Final Annotated Output Video:* saved to [intersection_annotated.mp4](file:///d:/btp/ml_model/video/intersection_annotated.mp4).
+*Final Annotated Output Video:* saved to `video/intersection_annotated.mp4`.

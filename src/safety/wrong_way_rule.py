@@ -1,30 +1,32 @@
 import os
+import argparse
 import pandas as pd
 import numpy as np
 
 
-def detect_wrong_way_violations(csv_file=None):
+def detect_wrong_way_violations(csv_file=None, output_csv="outputs/wrong_way.csv"):
     if csv_file is None:
         base_dir = os.path.dirname(__file__)
         data_candidates = [
-            os.path.join(base_dir, "..", "..", "data", "long1_tracks_narain_cleaned_edited.csv"),
-            os.path.join(base_dir, "..", "..", "newsafety_rules", "data", "long1_tracks_narain_cleaned_edited.csv"),
+            os.path.join(base_dir, "data", "tracks.csv"),
             os.path.join(base_dir, "data", "long1_tracks_narain_cleaned_edited.csv"),
-            r"data\long1_tracks_narain_cleaned_edited.csv",
+            os.path.join(base_dir, "..", "..", "data", "long1_tracks_narain_cleaned_edited.csv"),
+            "data/tracks.csv",
+            "data/long1_tracks_narain_cleaned_edited.csv",
         ]
         for candidate in data_candidates:
             if os.path.exists(candidate):
                 csv_file = candidate
                 break
         if csv_file is None:
-            csv_file = r"data\long1_tracks_narain_cleaned_edited.csv"
+            csv_file = "data/tracks.csv"
 
     # Load dataset
     try:
         df = pd.read_csv(csv_file)
     except FileNotFoundError:
-        print(f"Error: The file '{csv_file}' (resolved) was not found.")
-        return
+        print(f"Error: The file '{csv_file}' was not found. Please specify via --tracks <path_to_csv>.")
+        return None, {}
 
     try:
         from .calibration import CENTER_X as X_c, CENTER_Y as Y_c, R_INNER as R_MIN, R_OUTER as R_MAX
@@ -83,14 +85,14 @@ def detect_wrong_way_violations(csv_file=None):
     wrong_df = df[df["is_wrong_way"]]
     if wrong_df.empty:
         print("No Wrong-Way Driving Violations detected.")
-        return
+        return None, {}
 
     counts = wrong_df.groupby(["track_id", "consecutive_group"])["frame"].transform("count")
     valid_wrong = wrong_df[counts >= CONSECUTIVE_FRAMES_THRESHOLD]
 
     if valid_wrong.empty:
         print("No Wrong-Way Driving Violations detected.")
-        return
+        return None, {}
 
     violations = {}
     for tid, grp in valid_wrong.groupby("track_id"):
@@ -115,136 +117,23 @@ def detect_wrong_way_violations(csv_file=None):
     for track_id, info in violations.items():
         print(f"Track ID {track_id} (Class: {info['class_name']}) - Violation started at frame: {info['start_frame']}")
 
+    # Save output wrong_way.csv for visualization consumption
+    v_rows = [{"track_id": tid, "class_name": info["class_name"], "start_frame": info["start_frame"]} for tid, info in violations.items()]
+    out_df = pd.DataFrame(v_rows)
+    if output_csv:
+        os.makedirs(os.path.dirname(output_csv) or ".", exist_ok=True)
+        out_df.to_csv(output_csv, index=False)
+        print(f"\nSaved wrong-way violations to '{output_csv}' ({len(out_df)} flagged vehicles).")
+
+    return out_df, violations
+
 
 if __name__ == "__main__":
-    detect_wrong_way_violations()
+    parser = argparse.ArgumentParser(description="Wrong-Way Driving Rule Violation Detection")
+    # Put your input trajectory CSV path here:
+    parser.add_argument("--tracks", type=str, default="data/tracks.csv", help="Path to input trajectory CSV file (e.g. data/tracks.csv)")
+    # Put your output violations CSV path here:
+    parser.add_argument("--output", type=str, default="outputs/wrong_way.csv", help="Path to output violations CSV file")
 
-
-# import os
-# import pandas as pd
-# import numpy as np
-
-
-# def _resolve(path_str: str) -> str:
-#     if not path_str or os.path.exists(path_str):
-#         return path_str
-#     script_dir = os.path.dirname(os.path.abspath(__file__))
-#     project_root = os.path.abspath(os.path.join(script_dir, "..", ".."))
-#     cands = [
-#         os.path.join(project_root, path_str),
-#         os.path.join(project_root, "newsafety_rules", path_str),
-#         os.path.join(project_root, "newsafety_rules", "data", os.path.basename(path_str)),
-#         os.path.join(project_root, "data", os.path.basename(path_str)),
-#         os.path.join(script_dir, "..", path_str),
-#     ]
-#     for c in cands:
-#         if os.path.exists(c):
-#             return os.path.abspath(c)
-#     return path_str
-
-
-# def detect_wrong_way_violations(csv_file=None):
-#     if csv_file is None:
-#         csv_file = r"data\long1_tracks_narain_cleaned_edited.csv"
-
-#     resolved_csv = _resolve(csv_file)
-
-#     # Load dataset
-#     try:
-#         df = pd.read_csv(resolved_csv)
-#     except FileNotFoundError:
-#         print(f"Error: The file '{csv_file}' (resolved: '{resolved_csv}') was not found.")
-#         return
-
-#     # Constants
-#     X_c = 43.5
-#     Y_c = 28.5
-#     FPS = 30.0
-#     R_MIN = 6.0
-#     R_MAX = 14.0
-#     OMEGA_THRESHOLD = -0.1
-#     CONSECUTIVE_FRAMES_THRESHOLD = 15
-
-#     # 1. Calculate Polar Radius 'r' and Angle 'theta'
-#     # Assuming the coordinates to use are world_x and world_y
-#     df['dx'] = df['world_x'] - X_c
-#     df['dy'] = df['world_y'] - Y_c
-#     df['r'] = np.sqrt(df['dx']**2 + df['dy']**2)
-#     df['theta'] = np.arctan2(df['dy'], df['dx'])
-
-#     # 2. Group by 'track_id' and sort by 'frame'
-#     df = df.sort_values(by=['track_id', 'frame'])
-
-#     # Flag to keep track of violations
-#     violations = {}
-
-#     for track_id, group in df.groupby('track_id'):
-#         group = group.copy()
-        
-#         # 3. Compute shortest angular change
-#         theta_shift = group['theta'].shift(1)
-#         group['delta_theta'] = np.arctan2(np.sin(group['theta'] - theta_shift), np.cos(group['theta'] - theta_shift))
-        
-#         # 4. Calculate angular velocity
-#         group['omega'] = group['delta_theta'] * FPS
-        
-#         # 5. Check if vehicle is inside the circulating ring and traveling wrong way
-#         group['is_in_ring'] = (group['r'] >= R_MIN) & (group['r'] <= R_MAX)
-#         group['is_wrong_way'] = (group['omega'] < OMEGA_THRESHOLD) & group['is_in_ring']
-        
-#         # 6. Track continuous frames
-#         # We can find consecutive True values in 'is_wrong_way' by grouping by consecutive blocks
-#         group['consecutive_group'] = (group['is_wrong_way'] != group['is_wrong_way'].shift()).cumsum()
-        
-#         # Filter only the wrong way frames
-#         wrong_way_frames = group[group['is_wrong_way']]
-        
-#         # Count consecutive frames
-#         if not wrong_way_frames.empty:
-#             counts = wrong_way_frames.groupby('consecutive_group').size()
-#             valid_groups = counts[counts >= CONSECUTIVE_FRAMES_THRESHOLD].index
-            
-#             if not valid_groups.empty:
-#                 # Find the first frame of the first valid sequence
-#                 first_valid_group = valid_groups[0]
-#                 violation_start_frame = wrong_way_frames[wrong_way_frames['consecutive_group'] == first_valid_group]['frame'].iloc[0]
-#                 class_name = group['class_name'].iloc[0]
-                
-#                 violations[track_id] = {
-#                     'class_name': class_name,
-#                     'start_frame': int(violation_start_frame)
-#                 }
-
-#     # Prepare outputs
-#     if not violations:
-#         print("No Wrong-Way Driving Violations detected.")
-#         return
-
-#     print("--- Wrong-Way Driving Violations Summary ---")
-    
-#     # Broken down by class_name
-#     class_counts = {}
-#     for vid, info in violations.items():
-#         c_name = info['class_name']
-#         class_counts[c_name] = class_counts.get(c_name, 0) + 1
-        
-#     print("\nTotal number of unique track IDs flagged by class:")
-#     for c_name, count in class_counts.items():
-#         print(f"- {c_name}: {count}")
-
-#     print("\nSpecific track IDs caught violating the rule:")
-#     for track_id, info in violations.items():
-#         print(f"Track ID {track_id} (Class: {info['class_name']}) - Violation started at frame: {info['start_frame']}")
-
-#     # Save output wrong_way.csv for visualization consumption
-#     v_rows = [{"track_id": tid, "class_name": info["class_name"], "start_frame": info["start_frame"]} for tid, info in violations.items()]
-#     out_df = pd.DataFrame(v_rows)
-#     out_csv = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wrong_way.csv")
-#     out_df.to_csv(out_csv, index=False)
-
-
-# if __name__ == "__main__":
-#     dataset_file = r"data\long1_tracks_narain_cleaned_edited.csv"
-#     detect_wrong_way_violations(dataset_file)
-
-
+    args = parser.parse_args()
+    detect_wrong_way_violations(csv_file=args.tracks, output_csv=args.output)

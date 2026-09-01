@@ -83,8 +83,17 @@ def visualize_shortcut_violations(
 
 
 if __name__ == "__main__":
-    video_file = r"D:\btp\narain_data\full1 (1).MP4"
-    tracks_file = r"D:\btp\narain_data\long1_tracks_narain_cleaned_edited.csv"
-    shortcut_file = r"D:\btp\Traffic_Object_Detection_and_Tracking\src\safety\csv_outputs\unsafe_shortcut_violations.csv"
-    out_file = r"D:\btp\Traffic_Object_Detection_and_Tracking\outputs\video\full1_unsafe_shortcut.mp4"
-    visualize_shortcut_violations(video_file, tracks_file, shortcut_file, out_file)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Visualize Unsafe Roundabout Shortcut Violations")
+    # Put your video file path here:
+    parser.add_argument("--video", type=str, default="data/intersection.mp4", help="Path to input video file (e.g. data/intersection.mp4)")
+    # Put your tracks CSV file path here:
+    parser.add_argument("--tracks", type=str, default="data/tracks.csv", help="Path to input trajectory CSV file (e.g. data/tracks.csv)")
+    # Put your shortcut violations CSV path here:
+    parser.add_argument("--shortcuts", type=str, default="outputs/unsafe_shortcut_violations.csv", help="Path to shortcut violations CSV")
+    # Put your output annotated video path here:
+    parser.add_argument("--output", type=str, default="outputs/video/unsafe_shortcut_annotated.mp4", help="Path to output annotated MP4 video")
+    
+    args = parser.parse_args()
+    visualize_shortcut_violations(args.video, args.tracks, args.shortcuts, args.output)

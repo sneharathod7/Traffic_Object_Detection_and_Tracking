@@ -208,15 +208,39 @@ def visualize_erratic_weaving_video(
 
 
 if __name__ == "__main__":
-    base_dir = os.path.dirname(__file__)
-    csv_file = os.path.join(base_dir, "data", "long1_tracks_narain_cleaned_edited.csv")
-    video_file = os.path.join(base_dir, "data", "intersection.mp4")
+    import argparse
 
-    output_csv = os.path.join(base_dir, "output_erratic_weaving.csv")
-    output_video = os.path.join(base_dir, "output_erratic_weaving_vis.mp4")
+    parser = argparse.ArgumentParser(description="Erratic Lane Weaving Violation Detection & Visualization")
+    # Put your trajectory tracks CSV file path here:
+    parser.add_argument("--tracks", type=str, default="data/tracks.csv", help="Path to input trajectory CSV file (e.g. data/tracks.csv)")
+    # Put your video file path here (optional, for visualization):
+    parser.add_argument("--video", type=str, default="data/intersection.mp4", help="Path to input video file (e.g. data/intersection.mp4)")
+    # Put your output violations CSV path here:
+    parser.add_argument("--output_csv", type=str, default="outputs/output_erratic_weaving.csv", help="Path to output violations CSV file")
+    # Put your output annotated video path here:
+    parser.add_argument("--output_video", type=str, default="outputs/video/output_erratic_weaving_vis.mp4", help="Path to output annotated video")
+
+    args = parser.parse_args()
+
+    # Resolve CSV file
+    csv_file = args.tracks
+    if not os.path.exists(csv_file):
+        base_dir = os.path.dirname(__file__)
+        fallback_cands = [
+            os.path.join(base_dir, "data", "long1_tracks_narain_cleaned_edited.csv"),
+            os.path.join(base_dir, "..", "..", "data", "long1_tracks_narain_cleaned_edited.csv"),
+        ]
+        for c in fallback_cands:
+            if os.path.exists(c):
+                csv_file = c
+                break
+
+    video_file = args.video
+    output_csv = args.output_csv
+    output_video = args.output_video
 
     if not os.path.exists(csv_file):
-        print(f"File not found at '{csv_file}'. Please check the newsafety_rules/data folder.")
+        print(f"File not found at '{csv_file}'. Please specify your tracks file via --tracks <path_to_csv>.")
     else:
         print(f"Processing Erratic Lane Weaving Detection on: {csv_file}")
         res_df, violators = detect_erratic_weaving(csv_file)
@@ -226,10 +250,12 @@ if __name__ == "__main__":
         print(f"Erratic Weaving Flagged Frames: {res_df['is_erratic_weaving'].sum()}")
         print(f"Unique Violating Track IDs ({len(violators)}): {violators}")
         
+        os.makedirs(os.path.dirname(output_csv) or ".", exist_ok=True)
         res_df.to_csv(output_csv, index=False)
         print(f"Results saved to: {output_csv}")
 
         if os.path.exists(video_file):
+            os.makedirs(os.path.dirname(output_video) or ".", exist_ok=True)
             visualize_erratic_weaving_video(res_df, video_file, output_video)
         else:
-            print(f"\nNote: Video file '{video_file}' not found.")
+            print(f"\nNote: Video file '{video_file}' not found (skipping video generation).")
